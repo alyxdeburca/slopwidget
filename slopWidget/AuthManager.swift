@@ -1,5 +1,11 @@
 import Foundation
 import SwiftUI
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 public enum ServiceProviderType: String, CaseIterable, Identifiable {
     case antigravity = "antigravity"
@@ -117,6 +123,9 @@ public class AuthManager: ObservableObject {
     @Published public private(set) var chatGPTAuthState: ChatGPTAuthState = .signedOut
     /// Distinguishes the OAuth session from a manually pasted Codex token.
     @Published public private(set) var codexAuthMethod: ChatGPTAuthMethod = .apiKey
+    /// Latest ChatGPT usage fetched from the Codex usage endpoint.
+    @Published public private(set) var chatGPTUsage: ChatGPTUsage?
+    @Published public private(set) var chatGPTUsageError: String?
 
     private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
@@ -126,16 +135,19 @@ public class AuthManager: ObservableObject {
 
     private let chatGPTCredentialStore: any ChatGPTCredentialStoring
     private let chatGPTOAuthNetworking: any ChatGPTOAuthNetworking
+    private let chatGPTUsageService: any ChatGPTUsageFetching
     private var chatGPTTokens: ChatGPTTokens?
 
     public init(
         storage: UserDefaults = .standard,
         chatGPTCredentialStore: any ChatGPTCredentialStoring = KeychainChatGPTCredentialStore.shared,
-        chatGPTOAuthNetworking: any ChatGPTOAuthNetworking = URLSessionChatGPTOAuthNetworking()
+        chatGPTOAuthNetworking: any ChatGPTOAuthNetworking = URLSessionChatGPTOAuthNetworking(),
+        chatGPTUsageService: any ChatGPTUsageFetching = URLSessionChatGPTUsageFetcher()
     ) {
         self.defaults = storage
         self.chatGPTCredentialStore = chatGPTCredentialStore
         self.chatGPTOAuthNetworking = chatGPTOAuthNetworking
+        self.chatGPTUsageService = chatGPTUsageService
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
@@ -260,6 +272,37 @@ public class AuthManager: ObservableObject {
             return false
         } catch {
             chatGPTAuthState = .failed("Sign-in failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Fetch ChatGPT/Codex rate-limit usage, persist it for the widget, and
+    /// refresh the widget timelines. Safe to call repeatedly.
+    @discardableResult
+    public func refreshChatGPTUsage() async -> Bool {
+        do {
+            let tokens = try await refreshChatGPTTokensIfNeeded()
+            guard let accountID = tokens.accountID, !accountID.isEmpty else {
+                throw ChatGPTUsageError.missingAccountID
+            }
+            let usage = try await chatGPTUsageService.fetchUsage(tokens: tokens)
+            chatGPTUsage = usage
+            chatGPTUsageError = nil
+            var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+            snapshot.records["codex"] = UsageSnapshot.Record(
+                id: "codex",
+                usedPercent: Double(usage.usedPercent),
+                detail: usage.planLabel,
+                status: usage.statusText
+            )
+            snapshot.updatedAt = Date()
+            try? SharedUsageStore.save(snapshot)
+            #if canImport(WidgetKit)
+            WidgetCenter.shared.reloadAllTimelines()
+            #endif
+            return true
+        } catch {
+            chatGPTUsageError = error.localizedDescription
             return false
         }
     }

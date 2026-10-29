@@ -402,6 +402,7 @@ public struct ContentView: View {
     @State private var providers: [ProviderUsageItem] = []
     @State private var selectedTab: Int = 0
     @State private var showingLoginSheet: Bool = false
+    @State private var isRefreshingUsage: Bool = false
 
     public init() {}
 
@@ -415,14 +416,26 @@ public struct ContentView: View {
                             Label("Connected Services", systemImage: "key.fill")
                                 .font(.headline)
                             Spacer()
-                            Button {
-                                showingLoginSheet = true
-                            } label: {
-                                Text("Manage")
-                                    .font(.caption.bold())
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(Color.accentColor.opacity(0.15), in: Capsule())
+                            HStack(spacing: 8) {
+                                Button {
+                                    Task { await refreshUsage() }
+                                } label: {
+                                    if isRefreshingUsage {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
+                                }
+                                .disabled(isRefreshingUsage)
+                                Button {
+                                    showingLoginSheet = true
+                                } label: {
+                                    Text("Manage")
+                                        .font(.caption.bold())
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(Color.accentColor.opacity(0.15), in: Capsule())
+                                }
                             }
                         }
 
@@ -527,6 +540,32 @@ public struct ContentView: View {
                     providers = SampleUsageData.providers
                 }
             }
+            .task {
+                await refreshUsage()
+            }
+            .onChange(of: authManager.chatGPTUsage) { _, usage in
+                guard let usage else { return }
+                replaceCodexProvider(with: usage.providerUsageItem)
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshUsage() async {
+        guard authManager.codexAuthMethod == .chatGPT else { return }
+        isRefreshingUsage = true
+        defer { isRefreshingUsage = false }
+        await authManager.refreshChatGPTUsage()
+        if let usage = authManager.chatGPTUsage {
+            replaceCodexProvider(with: usage.providerUsageItem)
+        }
+    }
+
+    private func replaceCodexProvider(with item: ProviderUsageItem) {
+        if let index = providers.firstIndex(where: { $0.id == "codex" }) {
+            providers[index] = item
+        } else {
+            providers.append(item)
         }
     }
 

@@ -1,5 +1,6 @@
 import WidgetKit
 import SwiftUI
+import Foundation
 
 // MARK: - Usage Model
 
@@ -77,54 +78,34 @@ struct UsageWidgetProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageWidgetEntry) -> Void) {
-        let entry = UsageWidgetEntry(date: Date(), providers: UsageData.defaultProviders)
-        completion(entry)
+        completion(UsageWidgetEntry(date: Date(), providers: currentProviders()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageWidgetEntry>) -> Void) {
         let currentDate = Date()
-        var entries: [UsageWidgetEntry] = []
+        let entry = UsageWidgetEntry(date: currentDate, providers: currentProviders())
+        completion(Timeline(entries: [entry], policy: .after(currentDate.addingTimeInterval(15 * 60))))
+    }
 
-        // Create sample timeline with minor placeholder variations over time
-        for minuteOffset in stride(from: 0, to: 60, by: 15) {
-            guard let entryDate = Calendar.current.date(byAdding: .minute, value: minuteOffset, to: currentDate) else { continue }
-            let providers = [
-                ProviderUsage(
-                    id: "antigravity",
-                    name: "Antigravity",
-                    icon: "sparkles",
-                    color: Color(red: 0.65, green: 0.40, blue: 0.98),
-                    requestsUsed: min(100, 42 + minuteOffset / 5),
-                    requestLimit: 100,
-                    tokensUsed: "\(740 + minuteOffset * 8)k",
-                    status: "Active"
-                ),
-                ProviderUsage(
-                    id: "codex",
-                    name: "Codex",
-                    icon: "terminal.fill",
-                    color: Color(red: 0.20, green: 0.80, blue: 0.58),
-                    requestsUsed: min(100, 88 + minuteOffset / 10),
-                    requestLimit: 100,
-                    tokensUsed: "1.8M",
-                    status: "High"
-                ),
-                ProviderUsage(
-                    id: "opencode-go",
-                    name: "OpenCode Go",
-                    icon: "bolt.fill",
-                    color: Color(red: 0.25, green: 0.65, blue: 0.98),
-                    requestsUsed: min(50, 15 + minuteOffset / 6),
-                    requestLimit: 50,
-                    tokensUsed: "\(310 + minuteOffset * 4)k",
-                    status: "Normal"
-                )
-            ]
-            entries.append(UsageWidgetEntry(date: entryDate, providers: providers))
+    /// Read the snapshot the app writes to the shared keychain. Fall back to
+    /// the sample values when no live fetch has happened yet.
+    private func currentProviders() -> [ProviderUsage] {
+        guard let snapshot = SharedUsageStore.load() else {
+            return UsageData.defaultProviders
         }
-
-        let timeline = Timeline(entries: entries, policy: .atEnd)
-        completion(timeline)
+        return UsageData.defaultProviders.map { base in
+            guard let record = snapshot.records[base.id] else { return base }
+            return ProviderUsage(
+                id: base.id,
+                name: base.name,
+                icon: base.icon,
+                color: base.color,
+                requestsUsed: min(100, max(0, Int(record.usedPercent.rounded()))),
+                requestLimit: 100,
+                tokensUsed: record.detail,
+                status: record.status
+            )
+        }
     }
 }
 
