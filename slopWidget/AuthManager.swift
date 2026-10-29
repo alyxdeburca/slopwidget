@@ -55,6 +55,56 @@ public struct ServiceCredentials: Codable, Equatable, Sendable {
     }
 }
 
+/// How the Codex provider is currently authenticated.
+public enum ChatGPTAuthMethod: String, Codable, Sendable {
+    /// A manually pasted API key/token stored in `ServiceCredentials`.
+    case apiKey
+    /// A ChatGPT OAuth session whose tokens live in the Keychain.
+    case chatGPT
+}
+
+/// Observable state of the "Sign in with ChatGPT" flow.
+public enum ChatGPTAuthState: Equatable, Sendable {
+    case signedOut
+    case authorizing
+    case exchanging
+    case signedIn(identifier: String, expiresAt: Date?)
+    case failed(String)
+
+    public var isSignedIn: Bool {
+        if case .signedIn = self { return true }
+        return false
+    }
+
+    public var isBusy: Bool {
+        switch self {
+        case .authorizing, .exchanging: return true
+        default: return false
+        }
+    }
+
+    public var statusText: String {
+        switch self {
+        case .signedOut:
+            return "Not signed in with ChatGPT."
+        case .authorizing:
+            return "Waiting for ChatGPT sign-in in the browser…"
+        case .exchanging:
+            return "Finishing sign-in…"
+        case let .signedIn(identifier, expiresAt):
+            if let expiresAt {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .short
+                formatter.timeStyle = .short
+                return "Signed in as \(identifier). Token valid until \(formatter.string(from: expiresAt))."
+            }
+            return "Signed in as \(identifier)."
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
 @MainActor
 public class AuthManager: ObservableObject {
     public static let shared = AuthManager()
@@ -63,13 +113,29 @@ public class AuthManager: ObservableObject {
     @Published public var codexCreds: ServiceCredentials
     @Published public var opencodeGoCreds: ServiceCredentials
 
+    /// Drives the ChatGPT sign-in button/status in `LoginSheetView`.
+    @Published public private(set) var chatGPTAuthState: ChatGPTAuthState = .signedOut
+    /// Distinguishes the OAuth session from a manually pasted Codex token.
+    @Published public private(set) var codexAuthMethod: ChatGPTAuthMethod = .apiKey
+
     private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
     private let codexKey = "auth_creds_codex"
     private let opencodeKey = "auth_creds_opencode_go"
+    private let codexMethodKey = "auth_method_codex"
 
-    public init(storage: UserDefaults = .standard) {
+    private let chatGPTCredentialStore: any ChatGPTCredentialStoring
+    private let chatGPTOAuthNetworking: any ChatGPTOAuthNetworking
+    private var chatGPTTokens: ChatGPTTokens?
+
+    public init(
+        storage: UserDefaults = .standard,
+        chatGPTCredentialStore: any ChatGPTCredentialStoring = KeychainChatGPTCredentialStore.shared,
+        chatGPTOAuthNetworking: any ChatGPTOAuthNetworking = URLSessionChatGPTOAuthNetworking()
+    ) {
         self.defaults = storage
+        self.chatGPTCredentialStore = chatGPTCredentialStore
+        self.chatGPTOAuthNetworking = chatGPTOAuthNetworking
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
@@ -89,12 +155,29 @@ public class AuthManager: ObservableObject {
             isLoggedIn: true,
             lastVerified: Date()
         )
+
+        // OAuth tokens live only in secure storage. Never let a stale keychain
+        // item override an explicitly saved manual API-key login.
+        let storedMethod = storage.string(forKey: codexMethodKey).flatMap(ChatGPTAuthMethod.init(rawValue:))
+        if storedMethod == .apiKey {
+            self.codexAuthMethod = .apiKey
+        } else if let storedTokens = try? chatGPTCredentialStore.load() {
+            self.chatGPTTokens = storedTokens
+            self.codexAuthMethod = .chatGPT
+            self.chatGPTAuthState = .signedIn(
+                identifier: storedTokens.identifier,
+                expiresAt: storedTokens.expiresAt
+            )
+        } else {
+            self.codexAuthMethod = storedMethod ?? .apiKey
+        }
     }
 
     nonisolated public static func resetDefaults(in storage: UserDefaults = .standard) {
         storage.removeObject(forKey: "auth_creds_antigravity")
         storage.removeObject(forKey: "auth_creds_codex")
         storage.removeObject(forKey: "auth_creds_opencode_go")
+        storage.removeObject(forKey: "auth_method_codex")
     }
 
     public func credentials(for type: ServiceProviderType) -> ServiceCredentials {
@@ -124,6 +207,12 @@ public class AuthManager: ObservableObject {
         case .codex:
             codexCreds = newCreds
             save(newCreds, key: codexKey)
+            // Manual credentials take precedence over any previous OAuth session.
+            // The Keychain item is intentionally left intact but is ignored while
+            // the persisted method is `.apiKey`.
+            chatGPTTokens = nil
+            chatGPTAuthState = .signedOut
+            setCodexAuthMethod(.apiKey)
         case .opencodeGo:
             opencodeGoCreds = newCreds
             save(newCreds, key: opencodeKey)
@@ -138,12 +227,129 @@ public class AuthManager: ObservableObject {
             antigravityCreds = cleared
             save(cleared, key: agKey)
         case .codex:
+            signOutChatGPT()
             codexCreds = cleared
             save(cleared, key: codexKey)
         case .opencodeGo:
             opencodeGoCreds = cleared
             save(cleared, key: opencodeKey)
         }
+    }
+
+    // MARK: - ChatGPT OAuth
+
+    /// Runs the real Authorization Code + PKCE flow through the supplied client.
+    /// On success the refresh/access tokens are stored in the Keychain and the
+    /// account email (or account ID) becomes the Codex provider identifier.
+    @discardableResult
+    public func signInWithChatGPT(using client: ChatGPTOAuthClient) async -> Bool {
+        guard !chatGPTAuthState.isBusy else { return false }
+
+        chatGPTAuthState = .authorizing
+        do {
+            let tokens = try await client.authorize()
+            chatGPTAuthState = .exchanging
+            try chatGPTCredentialStore.save(tokens)
+            applyChatGPTTokens(tokens)
+            return true
+        } catch is CancellationError {
+            chatGPTAuthState = .failed(ChatGPTOAuthError.cancelled.userMessage)
+            return false
+        } catch let error as ChatGPTOAuthError {
+            chatGPTAuthState = .failed(error.userMessage)
+            return false
+        } catch {
+            chatGPTAuthState = .failed("Sign-in failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Returns a usable access token, refreshing it when it is within the
+    /// 60-second expiry skew. Throws `.notSignedIn` when no OAuth session exists.
+    public func chatGPTAccessToken(now: Date = Date()) async throws -> String {
+        try await refreshChatGPTTokensIfNeeded(now: now).accessToken
+    }
+
+    /// Refreshes the OAuth grant if required. A rejected refresh token signs the
+    /// user out rather than silently reusing expired credentials.
+    @discardableResult
+    public func refreshChatGPTTokensIfNeeded(now: Date = Date(), force: Bool = false) async throws -> ChatGPTTokens {
+        let current: ChatGPTTokens
+        if let tokens = chatGPTTokens {
+            current = tokens
+        } else if codexAuthMethod == .chatGPT, let stored = try chatGPTCredentialStore.load() {
+            current = stored
+            chatGPTTokens = stored
+        } else {
+            throw ChatGPTOAuthError.notSignedIn
+        }
+
+        if !force, !current.isExpired(at: now) {
+            return current
+        }
+        guard let refreshToken = current.refreshToken, !refreshToken.isEmpty else {
+            throw ChatGPTOAuthError.missingRefreshToken
+        }
+
+        chatGPTAuthState = .exchanging
+        do {
+            let response = try await chatGPTOAuthNetworking.refreshToken(
+                ChatGPTOAuthRefreshRequest(
+                    configuration: .codex(),
+                    refreshToken: refreshToken
+                )
+            )
+            let refreshed = try ChatGPTTokens(response: response, previous: current, now: now)
+            try chatGPTCredentialStore.save(refreshed)
+            applyChatGPTTokens(refreshed)
+            return refreshed
+        } catch let error as ChatGPTOAuthError {
+            if case .invalidGrant = error {
+                clearChatGPTSession()
+            } else {
+                chatGPTAuthState = .failed(error.userMessage)
+            }
+            throw error
+        }
+    }
+
+    /// Clears the OAuth session and its Keychain item. Manual credentials are
+    /// cleared separately by `logout(type: .codex)`.
+    public func signOutChatGPT() {
+        chatGPTTokens = nil
+        try? chatGPTCredentialStore.delete()
+        chatGPTAuthState = .signedOut
+        if codexAuthMethod == .chatGPT {
+            setCodexAuthMethod(.apiKey)
+        }
+    }
+
+    private func applyChatGPTTokens(_ tokens: ChatGPTTokens) {
+        chatGPTTokens = tokens
+        setCodexAuthMethod(.chatGPT)
+        codexCreds = ServiceCredentials(
+            apiKey: "",
+            identifier: tokens.identifier,
+            isLoggedIn: true,
+            lastVerified: tokens.expiresAt ?? Date()
+        )
+        save(codexCreds, key: codexKey)
+        chatGPTAuthState = .signedIn(identifier: tokens.identifier, expiresAt: tokens.expiresAt)
+    }
+
+    private func clearChatGPTSession() {
+        chatGPTTokens = nil
+        try? chatGPTCredentialStore.delete()
+        setCodexAuthMethod(.apiKey)
+        chatGPTAuthState = .signedOut
+        let cleared = ServiceCredentials(apiKey: "", identifier: "", isLoggedIn: false, lastVerified: nil)
+        codexCreds = cleared
+        save(cleared, key: codexKey)
+    }
+
+    private func setCodexAuthMethod(_ method: ChatGPTAuthMethod) {
+        codexAuthMethod = method
+        defaults.set(method.rawValue, forKey: codexMethodKey)
     }
 
     private func save(_ creds: ServiceCredentials, key: String) {

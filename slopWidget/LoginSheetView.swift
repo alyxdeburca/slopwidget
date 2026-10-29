@@ -10,8 +10,17 @@ public struct LoginSheetView: View {
     @State private var showingKey: Bool = false
     @State private var statusMessage: String?
     @State private var isSuccess: Bool = false
+    @State private var isSigningIn: Bool = false
 
-    public init() {}
+    private let oauthClientFactory: @MainActor () -> ChatGPTOAuthClient
+
+    public init(
+        oauthClientFactory: @escaping @MainActor () -> ChatGPTOAuthClient = {
+            ChatGPTOAuthClientFactory.makeDefault()
+        }
+    ) {
+        self.oauthClientFactory = oauthClientFactory
+    }
 
     public var body: some View {
         NavigationStack {
@@ -55,6 +64,65 @@ public struct LoginSheetView: View {
                         }
 
                         Divider()
+
+                        // ChatGPT OAuth (Codex only)
+                        if selectedTab == .codex {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("ChatGPT Account")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+
+                                Button {
+                                    performChatGPTLogin()
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        if isSigningIn {
+                                            ProgressView()
+                                                .tint(.white)
+                                        } else {
+                                            Image(systemName: "person.crop.circle.badge.checkmark")
+                                        }
+                                        Text(isSigningIn ? "Signing in…" : "Sign in with ChatGPT")
+                                    }
+                                    .font(.subheadline.bold())
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(Color(red: 0.06, green: 0.42, blue: 0.31), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                .disabled(isSigningIn || authManager.chatGPTAuthState.isBusy)
+
+                                HStack(alignment: .top, spacing: 6) {
+                                    Image(systemName: chatGPTStatusIcon)
+                                        .font(.caption2)
+                                        .foregroundColor(chatGPTStatusColor)
+                                    Text(authManager.chatGPTAuthState.statusText)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                if authManager.codexAuthMethod == .chatGPT && authManager.codexCreds.isLoggedIn {
+                                    Button {
+                                        authManager.logout(type: .codex)
+                                        apiKeyInput = ""
+                                        identifierInput = ""
+                                        statusMessage = "Signed out of ChatGPT."
+                                        isSuccess = false
+                                    } label: {
+                                        Text("Sign out of ChatGPT")
+                                            .font(.caption.bold())
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                            }
+
+                            Divider()
+
+                            Text("Manual token (fallback)")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                        }
 
                         // Input fields
                         VStack(alignment: .leading, spacing: 12) {
@@ -114,7 +182,7 @@ public struct LoginSheetView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: "link")
-                                    Text("Save & Connect")
+                                    Text(saveButtonTitle)
                                 }
                                 .font(.subheadline.bold())
                                 .foregroundColor(.white)
@@ -200,6 +268,52 @@ public struct LoginSheetView: View {
         apiKeyInput = creds.apiKey
         identifierInput = creds.identifier
         statusMessage = nil
+    }
+
+    private var saveButtonTitle: String {
+        selectedTab == .codex ? "Save API Token" : "Save & Connect"
+    }
+
+    private var chatGPTStatusIcon: String {
+        switch authManager.chatGPTAuthState {
+        case .signedOut: return "circle"
+        case .authorizing, .exchanging: return "arrow.triangle.2.circlepath"
+        case .signedIn: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var chatGPTStatusColor: Color {
+        switch authManager.chatGPTAuthState {
+        case .signedOut: return .secondary
+        case .authorizing, .exchanging: return .orange
+        case .signedIn: return .green
+        case .failed: return .orange
+        }
+    }
+
+    private func performChatGPTLogin() {
+        guard !isSigningIn else { return }
+        isSigningIn = true
+        statusMessage = nil
+        isSuccess = false
+
+        Task { @MainActor in
+            let client = oauthClientFactory()
+            let success = await authManager.signInWithChatGPT(using: client)
+            isSigningIn = false
+
+            if success {
+                let creds = authManager.credentials(for: .codex)
+                apiKeyInput = ""
+                identifierInput = creds.identifier
+                statusMessage = "Signed in with ChatGPT as \(creds.identifier)."
+                isSuccess = true
+            } else {
+                statusMessage = authManager.chatGPTAuthState.statusText
+                isSuccess = false
+            }
+        }
     }
 
     private func performLogin() {
