@@ -8,6 +8,10 @@ import FoundationNetworking
 import CryptoKit
 #endif
 
+#if canImport(os)
+import os
+#endif
+
 // MARK: - Configuration
 
 /// Configuration for OpenAI's native-app ("Sign in with ChatGPT") OAuth flow.
@@ -479,12 +483,19 @@ public protocol ChatGPTOAuthNetworking: Sendable {
 public struct URLSessionChatGPTOAuthNetworking: ChatGPTOAuthNetworking {
     public let session: URLSession
 
+    #if canImport(os)
+    private static let logger = Logger(subsystem: "com.example.slopWidget", category: "ChatGPTAuth")
+    #endif
+
     public init(session: URLSession = .shared) {
         self.session = session
     }
 
     public func exchangeAuthorizationCode(_ request: ChatGPTOAuthCodeExchange) async throws -> ChatGPTOAuthTokenResponse {
-        try await post(
+        #if canImport(os)
+        Self.logger.info("Exchanging ChatGPT code: redirect=\(request.redirectURI.absoluteString, privacy: .public) codeLen=\(request.code.count) verifierLen=\(request.codeVerifier.count)")
+        #endif
+        return try await post(
             endpoint: request.configuration.tokenEndpoint,
             parameters: [
                 ("grant_type", "authorization_code"),
@@ -510,6 +521,7 @@ public struct URLSessionChatGPTOAuthNetworking: ChatGPTOAuthNetworking {
                 ("client_id", request.configuration.clientID),
                 ("refresh_token", request.refreshToken),
             ],
+            json: true,
             failure: { status, message, code in
                 if code == "invalid_grant" || message.contains("invalid_grant") {
                     return .invalidGrant(message)
@@ -522,14 +534,25 @@ public struct URLSessionChatGPTOAuthNetworking: ChatGPTOAuthNetworking {
     private func post(
         endpoint: URL,
         parameters: [(String, String)],
+        json: Bool = false,
         failure: (Int, String, String?) -> ChatGPTOAuthError
     ) async throws -> ChatGPTOAuthTokenResponse {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        if json {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(
+                withJSONObject: Dictionary(uniqueKeysWithValues: parameters)
+            )
+        } else {
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Data(Self.formEncode(parameters).utf8)
+        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("slopWidget/1.0", forHTTPHeaderField: "User-Agent")
-        request.httpBody = Data(Self.formEncode(parameters).utf8)
+        // The token endpoint is the registered Codex native client. Match the
+        // CLI's identifying headers as well as its client_id/redirect_uri.
+        request.setValue("codex_cli_rs", forHTTPHeaderField: "originator")
+        request.setValue("codex_cli_rs/0.164.0 (Linux; x86_64) slopWidget/1.0", forHTTPHeaderField: "User-Agent")
 
         let data: Data
         let response: URLResponse
@@ -549,6 +572,9 @@ public struct URLSessionChatGPTOAuthNetworking: ChatGPTOAuthNetworking {
         guard (200..<300).contains(http.statusCode) else {
             let parsed = Self.parseError(from: data)
             let body = String(decoding: data, as: UTF8.self)
+            #if canImport(os)
+            Self.logger.error("Token endpoint \(http.statusCode) at \(endpoint.absoluteString, privacy: .public): \(body, privacy: .public)")
+            #endif
             let detail = parsed?.message ?? (body.isEmpty ? "no response body" : body)
             throw failure(http.statusCode, detail, parsed?.code)
         }

@@ -1,15 +1,16 @@
 import Foundation
 
-#if os(iOS) && canImport(AuthenticationServices)
-import AuthenticationServices
+#if os(iOS) && canImport(SafariServices)
+import SafariServices
 import UIKit
+import os
 #endif
 
 #if os(iOS) && canImport(Network)
 import Network
 #endif
 
-#if os(iOS) && canImport(Network) && canImport(AuthenticationServices)
+#if os(iOS) && canImport(Network) && canImport(SafariServices)
 
 // MARK: - Loopback callback listener
 
@@ -22,9 +23,11 @@ import Network
 actor LoopbackHTTPServer {
     private let ports: [UInt16]
     private var listener: NWListener?
+    private var baseURL: URL?
     private var waiter: CheckedContinuation<URL, Error>?
     private var completed: Result<URL, Error>?
     private var cancelled = false
+    private let logger = Logger(subsystem: "com.example.slopWidget", category: "ChatGPTAuth")
 
     init(ports: [UInt16] = [1455, 1457]) {
         self.ports = ports
@@ -36,7 +39,10 @@ actor LoopbackHTTPServer {
         for port in ports {
             do {
                 try await bind(port: port)
-                return URL(string: "http://127.0.0.1:\(port)/auth/callback")!
+                logger.info("Loopback listener bound on 127.0.0.1:\(port)")
+                let baseURL = URL(string: "http://127.0.0.1:\(port)")!
+                self.baseURL = baseURL
+                return URL(string: "/auth/callback", relativeTo: baseURL)!.absoluteURL
             } catch {
                 lastError = error
             }
@@ -92,6 +98,8 @@ actor LoopbackHTTPServer {
             case .ready:
                 ready.succeed()
             case let .failed(error):
+                Logger(subsystem: "com.example.slopWidget", category: "ChatGPTAuth")
+                    .error("Loopback listener failed: \(String(describing: error), privacy: .public)")
                 ready.fail(error)
             case .cancelled:
                 ready.fail(ChatGPTOAuthError.failedToStartCallbackListener)
@@ -123,7 +131,8 @@ actor LoopbackHTTPServer {
         guard
             let requestLine = request.split(separator: "\r\n").first,
             let target = requestLine.split(separator: " ").dropFirst().first.map(String.init),
-            let url = URL(string: "http://127.0.0.1\(target)")
+            let baseURL,
+            let url = URL(string: target, relativeTo: baseURL)?.absoluteURL
         else {
             respond(
                 connection: connection,
@@ -134,6 +143,7 @@ actor LoopbackHTTPServer {
         }
 
         let path = url.path
+        logger.info("Loopback request received for path \(path, privacy: .public)")
         if path == "/auth/callback" {
             respond(
                 connection: connection,
@@ -255,15 +265,23 @@ private final class ReadyGate: @unchecked Sendable {
     }
 }
 
-// MARK: - ASWebAuthenticationSession presenter
+// MARK: - In-app browser presenter
 
-/// Opens the OpenAI authorization page inside `ASWebAuthenticationSession` and
-/// waits for the loopback listener to receive the redirect.
+/// Opens the OpenAI authorization page in an in-app `SFSafariViewController`.
+///
+/// The loopback redirect only works while the app is running. Presenting the
+/// page in `ASWebAuthenticationSession` moves the host app to the background,
+/// which suspends the listener and drops the callback. `SFSafariViewController`
+/// is hosted by this app, so the app stays active and can serve the redirect.
 @MainActor
-public final class ASWebAuthenticationChatGPTPresenter: NSObject, ChatGPTAuthorizationPresenting, ASWebAuthenticationPresentationContextProviding {
+public final class SFSafariChatGPTPresenter: NSObject, ChatGPTAuthorizationPresenting, SFSafariViewControllerDelegate {
     private let ports: [UInt16]
-    private var session: ASWebAuthenticationSession?
+    private var safariViewController: SFSafariViewController?
     private var listener: LoopbackHTTPServer?
+    private var continuation: CheckedContinuation<URL, Error>?
+    private var completed = false
+
+    private let logger = Logger(subsystem: "com.example.slopWidget", category: "ChatGPTAuth")
 
     public init(ports: [UInt16] = [1455, 1457]) {
         self.ports = ports
@@ -276,129 +294,80 @@ public final class ASWebAuthenticationChatGPTPresenter: NSObject, ChatGPTAuthori
 
         let redirectURI = try await listener.start()
         let authorizationURL = try context.authorizationURL(redirectURI: redirectURI)
+        logger.info("Starting ChatGPT OAuth with callback \(redirectURI.absoluteString, privacy: .public)")
 
-        let outcome = await withTaskGroup(of: CallbackOutcome.self) { group in
-            group.addTask {
-                do {
-                    return .callback(.success(try await listener.waitForCallback()))
-                } catch {
-                    return .callback(.failure(error))
-                }
-            }
-            group.addTask { [weak self] in
-                guard let self else { return .browser(.failure(ChatGPTOAuthError.cancelled)) }
-                do {
-                    try await self.present(authorizationURL)
-                    return .browser(.success(()))
-                } catch {
-                    return .browser(.failure(error))
-                }
-            }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+                self.present(authorizationURL)
 
-            var result: Result<URL, Error> = .failure(ChatGPTOAuthError.cancelled)
-            while let next = await group.next() {
-                switch next {
-                case let .callback(callback):
-                    result = callback
-                    self.cancelSession()
-                    group.cancelAll()
-                case let .browser(browser):
-                    await listener.cancel()
-                    switch browser {
-                    case .success:
-                        result = .failure(ChatGPTOAuthError.cancelled)
-                    case let .failure(error):
-                        result = .failure(error)
+                Task { [weak self, listener] in
+                    do {
+                        let callback = try await listener.waitForCallback()
+                        await self?.finish(.success(callback))
+                    } catch {
+                        await self?.finish(.failure(error))
                     }
-                    group.cancelAll()
                 }
-                break
             }
-            return result
-        }
-
-        session = nil
-        self.listener = nil
-        await listener.cancel()
-        return try outcome.get()
-    }
-
-    private func present(_ url: URL) async throws {
-        let gate = SessionGate()
-        let session = ASWebAuthenticationSession(
-            url: url,
-            callbackURLScheme: nil
-        ) { callbackURL, error in
-            if let error {
-                if let authError = error as? ASWebAuthenticationSessionError,
-                   authError.code == .canceledLogin {
-                    gate.resume(throwing: ChatGPTOAuthError.cancelled)
-                } else {
-                    gate.resume(throwing: ChatGPTOAuthError.browserFailed(error.localizedDescription))
-                }
-            } else if callbackURL != nil {
-                // The loopback listener normally delivers the callback. If iOS
-                // ever hands it to the session instead, cancel and let the
-                // listener handle it (it has already seen the same request).
-                gate.resume(throwing: ChatGPTOAuthError.cancelled)
-            } else {
-                gate.resume(throwing: ChatGPTOAuthError.cancelled)
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                await self?.finish(.failure(ChatGPTOAuthError.cancelled))
             }
         }
-        session.presentationContextProvider = self
-        session.prefersEphemeralWebBrowserSession = false
-        self.session = session
+    }
 
-        if !session.start() {
-            gate.resume(throwing: ChatGPTOAuthError.browserFailed("Could not start the sign-in browser."))
+    private func present(_ url: URL) {
+        let controller = SFSafariViewController(url: url)
+        controller.delegate = self
+        safariViewController = controller
+
+        guard let presenter = Self.topViewController() else {
+            Task { await self.finish(.failure(ChatGPTOAuthError.browserFailed("Could not find a window to present the sign-in browser."))) }
+            return
         }
-        try await gate.wait()
+        presenter.present(controller, animated: true)
     }
 
-    private func cancelSession() {
-        session?.cancel()
-        session = nil
+    private func finish(_ result: Result<URL, Error>) async {
+        guard !completed else { return }
+        completed = true
+
+        let continuation = self.continuation
+        self.continuation = nil
+
+        await safariViewController?.dismiss(animated: true)
+        safariViewController = nil
+
+        await listener?.cancel()
+        listener = nil
+
+        switch result {
+        case .success:
+            logger.info("ChatGPT OAuth callback received")
+        case let .failure(error):
+            logger.error("ChatGPT OAuth browser flow ended: \(String(describing: error), privacy: .public)")
+        }
+        continuation?.resume(with: result)
     }
 
-    @objc public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+    public nonisolated func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
+        Task { @MainActor [weak self] in
+            await self?.finish(.failure(ChatGPTOAuthError.cancelled))
+        }
+    }
+
+    private static func topViewController() -> UIViewController? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let windows = scenes.flatMap(\.windows)
-        return windows.first(where: \.isKeyWindow) ?? windows.first ?? ASPresentationAnchor()
-    }
+        guard var controller = windows.first(where: \.isKeyWindow)?.rootViewController
+                ?? windows.first?.rootViewController
+        else { return nil }
 
-    private enum CallbackOutcome {
-        case callback(Result<URL, Error>)
-        case browser(Result<Void, Error>)
-    }
-}
-
-/// One-shot bridge from the session completion handler to an async waiter.
-@MainActor
-private final class SessionGate {
-    private var continuation: CheckedContinuation<Void, Error>?
-    private var finished = false
-    private var pending: Result<Void, Error>?
-
-    func wait() async throws {
-        if let pending {
-            return try pending.get()
+        while let presented = controller.presentedViewController, !presented.isBeingDismissed {
+            controller = presented
         }
-        try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-        }
-        if let pending {
-            try pending.get()
-        }
-    }
-
-    func resume(throwing error: Error) {
-        guard !finished else { return }
-        finished = true
-        pending = .failure(error)
-        if let continuation {
-            self.continuation = nil
-            continuation.resume(throwing: error)
-        }
+        return controller
     }
 }
 
@@ -406,7 +375,7 @@ private final class SessionGate {
 
 /// Placeholder presenter on platforms without the loopback/browser stack.
 @MainActor
-public final class ASWebAuthenticationChatGPTPresenter: ChatGPTAuthorizationPresenting {
+public final class SFSafariChatGPTPresenter: ChatGPTAuthorizationPresenting {
     public init(ports: [UInt16] = [1455, 1457]) {}
 
     public func authorize(context: ChatGPTAuthorizationContext) async throws -> URL {
@@ -430,13 +399,13 @@ public enum ChatGPTOAuthClientFactory {
         return ChatGPTOAuthClient(
             configuration: configuration,
             networking: networking,
-            presenter: ASWebAuthenticationChatGPTPresenter(ports: ports)
+            presenter: SFSafariChatGPTPresenter(ports: ports)
         )
         #else
         return ChatGPTOAuthClient(
             configuration: configuration,
             networking: networking,
-            presenter: ASWebAuthenticationChatGPTPresenter(ports: ports)
+            presenter: SFSafariChatGPTPresenter(ports: ports)
         )
         #endif
     }
