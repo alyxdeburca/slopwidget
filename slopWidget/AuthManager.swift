@@ -63,31 +63,38 @@ public class AuthManager: ObservableObject {
     @Published public var codexCreds: ServiceCredentials
     @Published public var opencodeGoCreds: ServiceCredentials
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
     private let codexKey = "auth_creds_codex"
     private let opencodeKey = "auth_creds_opencode_go"
 
-    public init() {
+    public init(storage: UserDefaults = .standard) {
+        self.defaults = storage
         // Load stored credentials or pre-populate defaults
-        self.antigravityCreds = AuthManager.load(from: defaults, key: agKey) ?? ServiceCredentials(
+        self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
             identifier: "adam@alyx.site",
             isLoggedIn: true,
             lastVerified: Date()
         )
-        self.codexCreds = AuthManager.load(from: defaults, key: codexKey) ?? ServiceCredentials(
+        self.codexCreds = AuthManager.load(from: storage, key: codexKey) ?? ServiceCredentials(
             apiKey: "sk-proj-codex-sample",
             identifier: "org-personal",
             isLoggedIn: true,
             lastVerified: Date()
         )
-        self.opencodeGoCreds = AuthManager.load(from: defaults, key: opencodeKey) ?? ServiceCredentials(
+        self.opencodeGoCreds = AuthManager.load(from: storage, key: opencodeKey) ?? ServiceCredentials(
             apiKey: "ocg_pat_demo",
             identifier: "https://api.opencode.dev",
             isLoggedIn: true,
             lastVerified: Date()
         )
+    }
+
+    nonisolated public static func resetDefaults(in storage: UserDefaults = .standard) {
+        storage.removeObject(forKey: "auth_creds_antigravity")
+        storage.removeObject(forKey: "auth_creds_codex")
+        storage.removeObject(forKey: "auth_creds_opencode_go")
     }
 
     public func credentials(for type: ServiceProviderType) -> ServiceCredentials {

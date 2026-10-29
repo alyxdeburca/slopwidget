@@ -2,6 +2,17 @@ import XCTest
 @testable import slopWidget
 
 final class AuthManagerTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        AuthManager.resetDefaults()
+    }
+
+    override func tearDown() {
+        AuthManager.resetDefaults()
+        super.tearDown()
+    }
+
     @MainActor
     func testInitialCredentialsExist() {
         let auth = AuthManager()
