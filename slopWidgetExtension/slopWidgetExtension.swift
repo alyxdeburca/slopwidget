@@ -14,6 +14,7 @@ struct ProviderUsage: Identifiable {
     var tokensUsed: String
     var status: String
     var hasRequestCount: Bool = true
+    var hasUsageData: Bool = true
 
     var percentage: Double {
         guard requestLimit > 0 else { return 0 }
@@ -22,6 +23,10 @@ struct ProviderUsage: Identifiable {
 
     var percentageInt: Int {
         Int(percentage * 100)
+    }
+
+    var percentageText: String {
+        hasUsageData ? "\(percentageInt)%" : "—"
     }
 }
 
@@ -32,10 +37,11 @@ enum UsageData {
             name: "Antigravity",
             icon: "sparkles",
             color: Color(red: 0.65, green: 0.40, blue: 0.98),
-            requestsUsed: 42,
+            requestsUsed: 0,
             requestLimit: 100,
-            tokensUsed: "740k",
-            status: "Active"
+            tokensUsed: "—",
+            status: "Not synced",
+            hasUsageData: false
         ),
         ProviderUsage(
             id: "codex",
@@ -52,10 +58,11 @@ enum UsageData {
             name: "OpenCode Go",
             icon: "bolt.fill",
             color: Color(red: 0.25, green: 0.65, blue: 0.98),
-            requestsUsed: 15,
+            requestsUsed: 0,
             requestLimit: 50,
-            tokensUsed: "310k",
-            status: "Normal"
+            tokensUsed: "—",
+            status: "Not synced",
+            hasUsageData: false
         )
     ]
 }
@@ -160,7 +167,7 @@ struct UsageWidgetEntryView: View {
                                 .font(.system(size: 10, weight: .semibold))
                                 .lineLimit(1)
                             Spacer()
-                            Text("\(provider.percentageInt)%")
+                            Text(provider.percentageText)
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundColor(provider.color)
                         }
@@ -206,7 +213,7 @@ struct UsageWidgetEntryView: View {
 
                         Spacer()
 
-                        Text("\(provider.percentageInt)%")
+                        Text(provider.percentageText)
                             .font(.system(size: 20, weight: .heavy, design: .rounded))
                             .foregroundColor(provider.color)
 

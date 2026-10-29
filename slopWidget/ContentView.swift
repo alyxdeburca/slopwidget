@@ -17,8 +17,9 @@ public struct ProviderUsageItem: Identifiable, Sendable {
     public var status: String
     /// False when the provider reports percentages but not request totals.
     public var hasRequestCount: Bool
+    public var hasUsageData: Bool
 
-    public init(id: String, name: String, shortName: String, icon: String, color: Color, requestsUsed: Int, requestLimit: Int, tokensUsed: String, status: String, hasRequestCount: Bool = true) {
+    public init(id: String, name: String, shortName: String, icon: String, color: Color, requestsUsed: Int, requestLimit: Int, tokensUsed: String, status: String, hasRequestCount: Bool = true, hasUsageData: Bool = true) {
         self.id = id
         self.name = name
         self.shortName = shortName
@@ -29,6 +30,7 @@ public struct ProviderUsageItem: Identifiable, Sendable {
         self.tokensUsed = tokensUsed
         self.status = status
         self.hasRequestCount = hasRequestCount
+        self.hasUsageData = hasUsageData
     }
 
     public var percentage: Double {
@@ -38,6 +40,10 @@ public struct ProviderUsageItem: Identifiable, Sendable {
 
     public var percentageInt: Int {
         Int(percentage * 100)
+    }
+
+    public var percentageText: String {
+        hasUsageData ? "\(percentageInt)%" : "—"
     }
 }
 
@@ -50,10 +56,11 @@ public enum SampleUsageData {
             shortName: "AG",
             icon: "sparkles",
             color: Color(red: 0.65, green: 0.40, blue: 0.98),
-            requestsUsed: 42,
+            requestsUsed: 0,
             requestLimit: 100,
-            tokensUsed: "740k",
-            status: "Active"
+            tokensUsed: "—",
+            status: "Not synced",
+            hasUsageData: false
         ),
         ProviderUsageItem(
             id: "codex",
@@ -72,10 +79,11 @@ public enum SampleUsageData {
             shortName: "OCG",
             icon: "bolt.fill",
             color: Color(red: 0.25, green: 0.65, blue: 0.98),
-            requestsUsed: 15,
+            requestsUsed: 0,
             requestLimit: 50,
-            tokensUsed: "310k",
-            status: "Normal"
+            tokensUsed: "—",
+            status: "Not synced",
+            hasUsageData: false
         )
     ]
 
@@ -128,7 +136,7 @@ public struct Widget1x1View: View {
                                 .font(.system(size: 9, weight: .bold))
                                 .lineLimit(1)
                             Spacer()
-                            Text("\(item.percentageInt)%")
+                            Text(item.percentageText)
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundColor(item.color)
                         }
@@ -195,7 +203,7 @@ public struct Widget1x2View: View {
 
                         Spacer()
 
-                        Text("\(item.percentageInt)%")
+                        Text(item.percentageText)
                             .font(.system(size: 22, weight: .heavy, design: .rounded))
                             .foregroundColor(item.color)
 
@@ -266,7 +274,7 @@ public struct Widget1x3View: View {
                         }
 
                         HStack(alignment: .firstTextBaseline) {
-                            Text("\(item.percentageInt)%")
+                            Text(item.percentageText)
                                 .font(.system(size: 16, weight: .heavy, design: .rounded))
                                 .foregroundColor(item.color)
                             Spacer()
@@ -362,7 +370,7 @@ public struct Widget2x2View: View {
                                 .background(item.color.opacity(0.18), in: Capsule())
                                 .foregroundColor(item.color)
 
-                            Text("\(item.percentageInt)%")
+                            Text(item.percentageText)
                                 .font(.subheadline.bold())
                                 .foregroundColor(item.color)
                         }
@@ -534,9 +542,11 @@ public struct ContentView: View {
                                     Text(providers[idx].name)
                                         .font(.subheadline.bold())
                                     Spacer()
-                                    Text(providers[idx].hasRequestCount
-                                         ? "\(providers[idx].requestsUsed) / \(providers[idx].requestLimit) reqs (\(providers[idx].percentageInt)%)"
-                                         : "\(providers[idx].percentageInt)% used")
+                                    Text(providers[idx].hasUsageData
+                                         ? (providers[idx].hasRequestCount
+                                            ? "\(providers[idx].requestsUsed) / \(providers[idx].requestLimit) reqs (\(providers[idx].percentageInt)%)"
+                                            : "\(providers[idx].percentageInt)% used")
+                                         : "Usage not available")
                                         .font(.caption.bold())
                                         .foregroundColor(providers[idx].color)
                                 }
