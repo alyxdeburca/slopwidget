@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-ipa:
-    name: Build signed IPA and create release
+    name: Build IPA and create release
     runs-on: macos-latest
     steps:
       - name: Checkout repository
@@ -31,65 +31,22 @@ jobs:
 
       - name: Generate Xcode project
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           xtool dev generate-xcode-project
 
-      - name: Install signing certificate
-        env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      - name: Build app (device)
         run: |
-          CERT_PATH=$RUNNER_TEMP/build_certificate.p12
-          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERT_PATH
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security import $CERT_PATH -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          xtool dev build
 
-      - name: Install provisioning profile
-        env:
-          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+      - name: Package IPA
         run: |
-          PP_PATH=$RUNNER_TEMP/profile.mobileprovision
-          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
-
-      - name: Archive
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          xcodebuild -workspace xtool/slopWidget.xcworkspace \
-            -scheme slopWidget-App \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -archivePath $RUNNER_TEMP/slopWidget.xcarchive \
-            archive
-
-      - name: Export IPA
-        run: |
-          cat > $RUNNER_TEMP/ExportOptions.plist <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>development</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-          </dict>
-          </plist>
-          EOF
-          xcodebuild -exportArchive \
-            -archivePath $RUNNER_TEMP/slopWidget.xcarchive \
-            -exportPath $RUNNER_TEMP/export \
-            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist
-          ls -la $RUNNER_TEMP/export
+          rm -rf Payload && mkdir Payload
+          cp -R xtool/slopWidget.app Payload/
+          zip -r slopWidget.ipa Payload
+          ls -la slopWidget.ipa
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: ${{ runner.temp }}/export/*.ipa
+          files: slopWidget.ipa
           generate_release_notes: true
