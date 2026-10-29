@@ -249,6 +249,6 @@ public struct LoginSheetView: View {
     }
 }
 
-#Preview {
+#Preview("LoginSheet") {
     LoginSheetView()
 }

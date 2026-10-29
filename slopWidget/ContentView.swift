@@ -499,7 +499,7 @@ public struct ContentView: View {
                                     ),
                                     in: 0...Double(providers[idx].requestLimit),
                                     step: 1
-                                )
+                                    )
                                 .tint(providers[idx].color)
                             }
                             .padding(12)
@@ -577,4 +577,8 @@ public struct ContentView: View {
         Color(.systemGroupedBackground).ignoresSafeArea()
         Widget2x2View()
     }
+}
+
+#Preview("MainDashboard") {
+    ContentView()
 }
