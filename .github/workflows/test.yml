@@ -22,7 +22,7 @@ jobs:
 
       - name: Install isim iOS Simulator & Toolchain
         run: |
-          curl -fsSL https://raw.githubusercontent.com/kolabs-dev/isim/main/install.sh | bash -s -- --no-desktop
+          curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/kolabs-dev/isim/main/install.sh | bash -s -- --no-desktop
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           export PATH="$HOME/.local/bin:$PATH"
           isim toolchain install
