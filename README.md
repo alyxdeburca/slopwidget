@@ -159,7 +159,20 @@ changed `CycleOpenCodeMeterIntent.swift`:
 ./scripts/update-appintents-metadata.sh
 ```
 
-### Interactive widget taps
+### Regenerating screenshots
+
+Screenshots are captured from the live app previews using isim:
+
+```bash
+./scripts/regenerate-screenshots.sh
+```
+
+This requires isim and xtool (see build instructions). A best-effort GitHub Action
+(`.github/workflows/screenshots.yml`) attempts the same on release, but hosted
+Linux runners lack the Xcode SDK that xtool needs, so regeneration normally
+happens locally.
+
+## Interactive widget taps
 
 iOS only runs a widget tap if the app bundle ships
 `Metadata.appintents/extract.actionsdata`, which Xcode normally produces with
