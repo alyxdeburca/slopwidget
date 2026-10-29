@@ -19,6 +19,8 @@ Cross-platform iOS and WidgetKit project created in [T3 Code](https://t3.codes),
   - [`ContentView.swift`](slopWidget/ContentView.swift): App interactive dashboard and live widget preview.
   - [`AuthManager.swift`](slopWidget/AuthManager.swift): Centralized `@MainActor` credential storage and state manager for Antigravity, Codex, and OpenCode Go.
   - [`LoginSheetView.swift`](slopWidget/LoginSheetView.swift): Interactive account management modal sheet.
+  - [`ChatGPTOAuth.swift`](slopWidget/ChatGPTOAuth.swift), [`ChatGPTOAuthSession.swift`](slopWidget/ChatGPTOAuthSession.swift), [`ChatGPTCredentialStore.swift`](slopWidget/ChatGPTCredentialStore.swift): Codex "Sign in with ChatGPT" OAuth (PKCE + loopback callback) and Keychain storage.
+  - [`OpenCodeOAuth.swift`](slopWidget/OpenCodeOAuth.swift), [`OpenCodeOAuthSession.swift`](slopWidget/OpenCodeOAuthSession.swift), [`OpenCodeCredentialStore.swift`](slopWidget/OpenCodeCredentialStore.swift): OpenCode Go "Sign in with OpenCode" device authorization grant and separate Keychain storage.
   - `Assets.xcassets`: App icons and accent colors.
 - **[slopWidgetExtension/](slopWidgetExtension/)**: Widget extension source code:
   - [`slopWidgetExtension.swift`](slopWidgetExtension/slopWidgetExtension.swift): WidgetKit `WidgetBundle`, timeline provider, and custom views for small, medium, and lock screen accessory widgets.
@@ -133,3 +135,30 @@ Open `slopWidget.xcworkspace` in Xcode 16 or later:
 1. Select an iOS Simulator or physical device.
 2. Select the `slopWidget` scheme and click **Run**.
 3. Under **Signing & Capabilities**, select your development team and adjust bundle IDs if needed.
+
+---
+
+## OpenCode Go authentication
+
+The **OpenCode Go** tab offers **Sign in with OpenCode**, which uses OpenCode
+Console's OAuth 2.0 device authorization grant (the same flow as
+`opencode auth login`, verified against `opencode` v2.2.0 and the live service):
+
+| Setting | Value | Source |
+| --- | --- | --- |
+| Server | `https://opencode.ai/console` | CLI credential `metadata.server` |
+| Client ID | `opencode-cli` (public native client) | CLI binary device-flow client ID |
+| Device code | `POST /auth/device/code` with `client_id`, `supports_org_scope` | CLI device flow |
+| Token / refresh | `POST /auth/device/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code` / `refresh_token` | CLI device flow |
+| Account / orgs | `GET /api/user`, `GET /api/orgs` (Bearer access token) | CLI device flow |
+| Metadata | `https://console.opencode.ai/.well-known/oauth-authorization-server` | Live discovery document |
+
+The server returns a `user_code` and a `verification_uri_complete` such as
+`/console/device?user_code=…&client_id=opencode-cli`; the app opens that page in
+an in-app Safari view and polls the token endpoint (`authorization_pending`,
+`slow_down`, `access_denied`, `expired_token` are handled). Unlike the ChatGPT
+flow, no redirect URI, loopback listener, or URL-scheme registration is needed.
+
+Access/refresh tokens are stored in a Keychain item
+(`com.example.slopWidget.opencode`) separate from the ChatGPT item and from the
+manual OpenCode Go token/endpoint fallback in the same tab.

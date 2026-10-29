@@ -161,6 +161,72 @@ public enum AntigravityAuthState: Equatable, Sendable {
     }
 }
 
+/// How the OpenCode Go provider is currently authenticated.
+public enum OpenCodeAuthMethod: String, Codable, Sendable {
+    /// A manually pasted token/endpoint stored in `ServiceCredentials`.
+    case apiKey
+    /// An OpenCode Console OAuth session whose tokens live in the Keychain.
+    case oauth
+}
+
+/// Observable state of the "Sign in with OpenCode" device flow.
+public enum OpenCodeAuthState: Equatable, Sendable {
+    case signedOut
+    case requestingCode
+    case waitingForApproval(userCode: String, verificationURL: URL)
+    case exchanging
+    case signedIn(identifier: String, expiresAt: Date?)
+    case failed(String)
+
+    public var isSignedIn: Bool {
+        if case .signedIn = self { return true }
+        return false
+    }
+
+    public var isBusy: Bool {
+        switch self {
+        case .requestingCode, .waitingForApproval, .exchanging: return true
+        default: return false
+        }
+    }
+
+    /// Code the user types into the verification page, when available.
+    public var userCode: String? {
+        if case let .waitingForApproval(userCode, _) = self { return userCode }
+        return nil
+    }
+
+    /// Page where the code is approved, when available.
+    public var verificationURL: URL? {
+        if case let .waitingForApproval(_, url) = self { return url }
+        return nil
+    }
+
+    public var statusText: String {
+        switch self {
+        case .signedOut:
+            return "Not signed in with OpenCode."
+        case .requestingCode:
+            return "Requesting an OpenCode sign-in code…"
+        case let .waitingForApproval(userCode, url):
+            let location = [url.host, url.path].compactMap { $0 }.joined()
+            return "Enter code \(userCode) at \(location) or finish signing in in the browser."
+        case .exchanging:
+            return "Finishing sign-in…"
+        case let .signedIn(identifier, expiresAt):
+            if let expiresAt {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .short
+                formatter.timeStyle = .short
+                return "Signed in as \(identifier). Token valid until \(formatter.string(from: expiresAt))."
+            }
+            return "Signed in as \(identifier)."
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
 @MainActor
 public class AuthManager: ObservableObject {
     public static let shared = AuthManager()
@@ -182,12 +248,18 @@ public class AuthManager: ObservableObject {
     /// Distinguishes the Google OAuth session from a manually pasted key.
     @Published public private(set) var antigravityAuthMethod: AntigravityAuthMethod = .apiKey
 
+    /// Drives the OpenCode sign-in button/status in `LoginSheetView`.
+    @Published public private(set) var openCodeAuthState: OpenCodeAuthState = .signedOut
+    /// Distinguishes the OpenCode device grant from a manually pasted token.
+    @Published public private(set) var openCodeAuthMethod: OpenCodeAuthMethod = .apiKey
+
     private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
     private let codexKey = "auth_creds_codex"
     private let opencodeKey = "auth_creds_opencode_go"
     private let codexMethodKey = "auth_method_codex"
     private let antigravityMethodKey = "auth_method_antigravity"
+    private let openCodeMethodKey = "auth_method_opencode"
 
     private let chatGPTCredentialStore: any ChatGPTCredentialStoring
     private let chatGPTOAuthNetworking: any ChatGPTOAuthNetworking
@@ -197,6 +269,9 @@ public class AuthManager: ObservableObject {
     private let antigravityCredentialStore: any AntigravityCredentialStoring
     private let antigravityOAuthNetworking: any AntigravityOAuthNetworking
     private var antigravityTokens: AntigravityTokens?
+    private let openCodeCredentialStore: any OpenCodeCredentialStoring
+    private let openCodeOAuthNetworking: any OpenCodeOAuthNetworking
+    private var openCodeTokens: OpenCodeTokens?
 
     public init(
         storage: UserDefaults = .standard,
@@ -204,7 +279,9 @@ public class AuthManager: ObservableObject {
         chatGPTOAuthNetworking: any ChatGPTOAuthNetworking = URLSessionChatGPTOAuthNetworking(),
         chatGPTUsageService: any ChatGPTUsageFetching = URLSessionChatGPTUsageFetcher(),
         antigravityCredentialStore: any AntigravityCredentialStoring = KeychainAntigravityCredentialStore.shared,
-        antigravityOAuthNetworking: any AntigravityOAuthNetworking = URLSessionAntigravityOAuthNetworking()
+        antigravityOAuthNetworking: any AntigravityOAuthNetworking = URLSessionAntigravityOAuthNetworking(),
+        openCodeCredentialStore: any OpenCodeCredentialStoring = KeychainOpenCodeCredentialStore.shared,
+        openCodeOAuthNetworking: any OpenCodeOAuthNetworking = URLSessionOpenCodeOAuthNetworking()
     ) {
         self.defaults = storage
         self.chatGPTCredentialStore = chatGPTCredentialStore
@@ -212,6 +289,8 @@ public class AuthManager: ObservableObject {
         self.chatGPTUsageService = chatGPTUsageService
         self.antigravityCredentialStore = antigravityCredentialStore
         self.antigravityOAuthNetworking = antigravityOAuthNetworking
+        self.openCodeCredentialStore = openCodeCredentialStore
+        self.openCodeOAuthNetworking = openCodeOAuthNetworking
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
@@ -270,6 +349,29 @@ public class AuthManager: ObservableObject {
         } else {
             self.antigravityAuthMethod = storedAntigravityMethod ?? .apiKey
         }
+
+        // Same precedence rules for the OpenCode Go device grant.
+        let storedOpenCodeMethod = storage.string(forKey: "auth_method_opencode")
+            .flatMap(OpenCodeAuthMethod.init(rawValue:))
+        if storedOpenCodeMethod == .apiKey {
+            self.openCodeAuthMethod = .apiKey
+        } else if let storedTokens = try? openCodeCredentialStore.load() {
+            self.openCodeTokens = storedTokens
+            self.openCodeAuthMethod = .oauth
+            self.openCodeAuthState = .signedIn(
+                identifier: storedTokens.identifier,
+                expiresAt: storedTokens.expiresAt
+            )
+            self.opencodeGoCreds = ServiceCredentials(
+                apiKey: "",
+                identifier: storedTokens.identifier,
+                isLoggedIn: true,
+                lastVerified: storedTokens.expiresAt ?? Date()
+            )
+        } else {
+            self.openCodeAuthMethod = storedOpenCodeMethod ?? .apiKey
+        }
+        }
     }
 
     nonisolated public static func resetDefaults(in storage: UserDefaults = .standard) {
@@ -278,6 +380,7 @@ public class AuthManager: ObservableObject {
         storage.removeObject(forKey: "auth_creds_opencode_go")
         storage.removeObject(forKey: "auth_method_codex")
         storage.removeObject(forKey: "auth_method_antigravity")
+        storage.removeObject(forKey: "auth_method_opencode")
     }
 
     public func credentials(for type: ServiceProviderType) -> ServiceCredentials {
@@ -322,6 +425,12 @@ public class AuthManager: ObservableObject {
         case .opencodeGo:
             opencodeGoCreds = newCreds
             save(newCreds, key: opencodeKey)
+            // Manual credentials take precedence over the device grant. The
+            // Keychain item is intentionally left intact but ignored while the
+            // persisted method is `.apiKey`.
+            openCodeTokens = nil
+            openCodeAuthState = .signedOut
+            setOpenCodeAuthMethod(.apiKey)
         }
         return true
     }
@@ -338,6 +447,7 @@ public class AuthManager: ObservableObject {
             codexCreds = cleared
             save(cleared, key: codexKey)
         case .opencodeGo:
+            signOutOpenCode()
             opencodeGoCreds = cleared
             save(cleared, key: opencodeKey)
         }
@@ -618,6 +728,133 @@ public class AuthManager: ObservableObject {
     private func setCodexAuthMethod(_ method: ChatGPTAuthMethod) {
         codexAuthMethod = method
         defaults.set(method.rawValue, forKey: codexMethodKey)
+    }
+
+    // MARK: - OpenCode OAuth (device grant)
+
+    /// Runs the real OpenCode Console device authorization grant through the
+    /// supplied client. On success the access/refresh tokens are stored in a
+    /// Keychain item separate from the ChatGPT session, and the account email
+    /// (or user ID) becomes the OpenCode Go provider identifier.
+    @discardableResult
+    public func signInWithOpenCode(using client: OpenCodeOAuthClient) async -> Bool {
+        guard !openCodeAuthState.isBusy else { return false }
+
+        openCodeAuthState = .requestingCode
+        do {
+            let tokens = try await client.signIn { [weak self] device in
+                guard let self else { return }
+                self.openCodeAuthState = .waitingForApproval(
+                    userCode: device.userCode,
+                    verificationURL: device.verificationURL
+                )
+            }
+            openCodeAuthState = .exchanging
+            try openCodeCredentialStore.save(tokens)
+            applyOpenCodeTokens(tokens)
+            return true
+        } catch is CancellationError {
+            openCodeAuthState = .failed(OpenCodeOAuthError.cancelled.userMessage)
+            return false
+        } catch let error as OpenCodeOAuthError {
+            openCodeAuthState = .failed(error.userMessage)
+            return false
+        } catch {
+            openCodeAuthState = .failed("Sign-in failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Returns a usable access token, refreshing it when it is within the
+    /// 60-second expiry skew. Throws `.notSignedIn` when no OAuth session exists.
+    public func openCodeAccessToken(now: Date = Date()) async throws -> String {
+        try await refreshOpenCodeTokensIfNeeded(now: now).accessToken
+    }
+
+    /// Refreshes the device grant if required. A rejected refresh token signs the
+    /// user out rather than silently reusing expired credentials.
+    @discardableResult
+    public func refreshOpenCodeTokensIfNeeded(now: Date = Date(), force: Bool = false) async throws -> OpenCodeTokens {
+        let current: OpenCodeTokens
+        if let tokens = openCodeTokens {
+            current = tokens
+        } else if openCodeAuthMethod == .oauth, let stored = try openCodeCredentialStore.load() {
+            current = stored
+            openCodeTokens = stored
+        } else {
+            throw OpenCodeOAuthError.notSignedIn
+        }
+
+        if !force, !current.isExpired(at: now) {
+            return current
+        }
+        guard let refreshToken = current.refreshToken, !refreshToken.isEmpty else {
+            throw OpenCodeOAuthError.missingRefreshToken
+        }
+
+        openCodeAuthState = .exchanging
+        do {
+            let response = try await openCodeOAuthNetworking.refreshToken(
+                OpenCodeRefreshRequest(
+                    configuration: OpenCodeOAuthConfiguration().withServer(current.server),
+                    refreshToken: refreshToken
+                )
+            )
+            let refreshed = try OpenCodeTokens(
+                refreshResponse: response,
+                previous: current,
+                now: now
+            )
+            try openCodeCredentialStore.save(refreshed)
+            applyOpenCodeTokens(refreshed)
+            return refreshed
+        } catch let error as OpenCodeOAuthError {
+            if case .invalidGrant = error {
+                clearOpenCodeSession()
+            } else {
+                openCodeAuthState = .failed(error.userMessage)
+            }
+            throw error
+        }
+    }
+
+    /// Clears the device-grant session and its Keychain item. Manual credentials
+    /// are cleared separately by `logout(type: .opencodeGo)`.
+    public func signOutOpenCode() {
+        openCodeTokens = nil
+        try? openCodeCredentialStore.delete()
+        openCodeAuthState = .signedOut
+        if openCodeAuthMethod == .oauth {
+            setOpenCodeAuthMethod(.apiKey)
+        }
+    }
+
+    private func applyOpenCodeTokens(_ tokens: OpenCodeTokens) {
+        openCodeTokens = tokens
+        setOpenCodeAuthMethod(.oauth)
+        opencodeGoCreds = ServiceCredentials(
+            apiKey: "",
+            identifier: tokens.identifier,
+            isLoggedIn: true,
+            lastVerified: tokens.expiresAt ?? Date()
+        )
+        save(opencodeGoCreds, key: opencodeKey)
+        openCodeAuthState = .signedIn(identifier: tokens.identifier, expiresAt: tokens.expiresAt)
+    }
+
+    private func clearOpenCodeSession() {
+        openCodeTokens = nil
+        try? openCodeCredentialStore.delete()
+        setOpenCodeAuthMethod(.apiKey)
+        openCodeAuthState = .signedOut
+        let cleared = ServiceCredentials(apiKey: "", identifier: "", isLoggedIn: false, lastVerified: nil)
+        opencodeGoCreds = cleared
+        save(cleared, key: opencodeKey)
+    }
+
+    private func setOpenCodeAuthMethod(_ method: OpenCodeAuthMethod) {
+        openCodeAuthMethod = method
+        defaults.set(method.rawValue, forKey: openCodeMethodKey)
     }
 
     private func save(_ creds: ServiceCredentials, key: String) {

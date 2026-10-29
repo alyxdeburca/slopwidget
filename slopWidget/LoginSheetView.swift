@@ -12,9 +12,12 @@ public struct LoginSheetView: View {
     @State private var isSuccess: Bool = false
     @State private var isSigningIn: Bool = false
     @State private var isSigningInWithGoogle: Bool = false
+    @State private var isSigningInOpenCode: Bool = false
+    @State private var openCodeLoginTask: Task<Void, Never>?
 
     private let oauthClientFactory: @MainActor () -> ChatGPTOAuthClient
     private let googleOAuthClientFactory: @MainActor () -> AntigravityOAuthClient
+    private let openCodeOAuthClientFactory: @MainActor () -> OpenCodeOAuthClient
 
     public init(
         oauthClientFactory: @escaping @MainActor () -> ChatGPTOAuthClient = {
@@ -22,10 +25,14 @@ public struct LoginSheetView: View {
         },
         googleOAuthClientFactory: @escaping @MainActor () -> AntigravityOAuthClient = {
             AntigravityOAuthClientFactory.makeDefault()
+        },
+        openCodeOAuthClientFactory: @escaping @MainActor () -> OpenCodeOAuthClient = {
+            OpenCodeOAuthClientFactory.makeDefault()
         }
     ) {
         self.oauthClientFactory = oauthClientFactory
         self.googleOAuthClientFactory = googleOAuthClientFactory
+        self.openCodeOAuthClientFactory = openCodeOAuthClientFactory
     }
 
     public var body: some View {
@@ -179,6 +186,88 @@ public struct LoginSheetView: View {
                                         isSuccess = false
                                     } label: {
                                         Text("Sign out of ChatGPT")
+                                            .font(.caption.bold())
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                            }
+
+                            Divider()
+
+                            Text("Manual token (fallback)")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                        }
+
+                        // OpenCode device grant (OpenCode Go only)
+                        if selectedTab == .opencodeGo {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("OpenCode Account")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+
+                                Button {
+                                    performOpenCodeLogin()
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        if isSigningInOpenCode {
+                                            ProgressView()
+                                                .tint(.white)
+                                        } else {
+                                            Image(systemName: "person.badge.key.fill")
+                                        }
+                                        Text(isSigningInOpenCode ? "Signing in…" : "Sign in with OpenCode")
+                                    }
+                                    .font(.subheadline.bold())
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(Color(red: 0.13, green: 0.42, blue: 0.78), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                .disabled(isSigningInOpenCode || authManager.openCodeAuthState.isBusy)
+
+                                if let code = authManager.openCodeAuthState.userCode {
+                                    HStack(spacing: 10) {
+                                        Text(code)
+                                            .font(.system(.title3, design: .monospaced).bold())
+                                        Spacer()
+                                        if let url = authManager.openCodeAuthState.verificationURL {
+                                            Link("Open page", destination: url)
+                                                .font(.caption.bold())
+                                        }
+                                    }
+                                    .padding(10)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                                }
+
+                                HStack(alignment: .top, spacing: 6) {
+                                    Image(systemName: openCodeStatusIcon)
+                                        .font(.caption2)
+                                        .foregroundColor(openCodeStatusColor)
+                                    Text(authManager.openCodeAuthState.statusText)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                if authManager.openCodeAuthState.isBusy {
+                                    Button("Cancel sign-in") {
+                                        cancelOpenCodeLogin()
+                                    }
+                                    .font(.caption.bold())
+                                    .foregroundColor(.orange)
+                                }
+
+                                if authManager.openCodeAuthMethod == .oauth && authManager.opencodeGoCreds.isLoggedIn {
+                                    Button {
+                                        authManager.logout(type: .opencodeGo)
+                                        apiKeyInput = ""
+                                        identifierInput = ""
+                                        statusMessage = "Signed out of OpenCode."
+                                        isSuccess = false
+                                    } label: {
+                                        Text("Sign out of OpenCode")
                                             .font(.caption.bold())
                                             .foregroundColor(.red)
                                     }
@@ -369,10 +458,28 @@ public struct LoginSheetView: View {
         }
     }
 
+    private var openCodeStatusIcon: String {
+        switch authManager.openCodeAuthState {
+        case .signedOut: return "circle"
+        case .requestingCode, .waitingForApproval, .exchanging: return "arrow.triangle.2.circlepath"
+        case .signedIn: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
     private var googleStatusColor: Color {
         switch authManager.antigravityAuthState {
         case .signedOut: return .secondary
         case .authorizing, .exchanging: return .orange
+        case .signedIn: return .green
+        case .failed: return .orange
+        }
+    }
+
+    private var openCodeStatusColor: Color {
+        switch authManager.openCodeAuthState {
+        case .signedOut: return .secondary
+        case .requestingCode, .waitingForApproval, .exchanging: return .orange
         case .signedIn: return .green
         case .failed: return .orange
         }
@@ -402,6 +509,36 @@ public struct LoginSheetView: View {
         }
     }
 
+    private func performOpenCodeLogin() {
+        guard !isSigningInOpenCode else { return }
+        isSigningInOpenCode = true
+        statusMessage = nil
+        isSuccess = false
+
+        openCodeLoginTask = Task { @MainActor in
+            let client = openCodeOAuthClientFactory()
+            let success = await authManager.signInWithOpenCode(using: client)
+            isSigningInOpenCode = false
+            openCodeLoginTask = nil
+
+            if success {
+                let creds = authManager.credentials(for: .opencodeGo)
+                apiKeyInput = ""
+                identifierInput = creds.identifier
+                statusMessage = "Signed in with OpenCode as \(creds.identifier)."
+                isSuccess = true
+            } else {
+                statusMessage = authManager.openCodeAuthState.statusText
+                isSuccess = false
+            }
+        }
+    }
+
+    /// Cancels the in-flight device poll (for example when the user dismisses
+    /// the browser before approving). The server-side code then expires unused.
+    private func cancelOpenCodeLogin() {
+        openCodeLoginTask?.cancel()
+    }
     private func performChatGPTLogin() {
         guard !isSigningIn else { return }
         isSigningIn = true

@@ -277,13 +277,14 @@ struct slopWidgetBundle: WidgetBundle {
     }
 }
 
-struct slopWidget: Widget {
+@MainActor
+struct slopWidget: @preconcurrency Widget {
     let kind: String = "slopWidget"
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: UsageWidgetProvider()) { entry in
             UsageWidgetEntryView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName("AI Usage Stats")
         .description("Track requests and token usage for Antigravity, Codex, and OpenCode Go.")
