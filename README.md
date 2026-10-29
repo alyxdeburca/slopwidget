@@ -29,6 +29,39 @@ Cross-platform iOS and WidgetKit project created in [T3 Code](https://t3.codes),
 
 ---
 
+## Antigravity "Sign in with Google"
+
+The Antigravity tab supports a real Google OAuth 2.0 Authorization Code + PKCE
+flow in addition to the manual API-key fallback.
+
+- **Client ID**: `1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com`
+- **Redirect**: `http://127.0.0.1:<ephemeral-port>/` (loopback listener; the
+  assigned port is reused for the token exchange, no custom URL scheme)
+- **Scopes**:
+  - `https://www.googleapis.com/auth/cloud-platform`
+  - `https://www.googleapis.com/auth/userinfo.email`
+  - `https://www.googleapis.com/auth/aicode`
+
+These values were verified from the Antigravity ACP server 1.3.0 embedded at
+`~/.t3/tools/antigravity-acp/linux-x64/versions/.../agy_acp_server.par`
+(`google3/cloud/developer_experience/antigravity_extensions/acp_server/ccpa_connection/oauth_manager.py`,
+"Default OAuth Client Credentials and Scopes"), which documents that they were
+copied from the Go Antigravity CLI's `constants.go`. The live Antigravity ACP
+token file (`<GEMINI_HOME or ~/.gemini>/antigravity-acp/acp_token.json`; on this
+machine under `~/.t3/userdata/providers/antigravity/`) also contains the same
+client ID and scopes. The client secret belongs to Google's public installed-application
+client and is shipped with the Antigravity CLI; it is not a user credential.
+The app stores only the resulting access/refresh tokens, in a Keychain item
+separate from the ChatGPT OAuth session and manual API keys.
+
+To use a different Google client, set `AntigravityGoogleOAuthClientID` (and
+optionally `AntigravityGoogleOAuthClientSecret`) in the app's Info.plist. An
+empty client ID disables the flow and surfaces the precise
+"Google OAuth is not configured." error. The constants live in
+[`slopWidget/AntigravityOAuth.swift`](slopWidget/AntigravityOAuth.swift).
+
+---
+
 ## Testing
 
 ### Run Tests Locally (isim)

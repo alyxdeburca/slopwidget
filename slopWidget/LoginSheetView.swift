@@ -11,15 +11,21 @@ public struct LoginSheetView: View {
     @State private var statusMessage: String?
     @State private var isSuccess: Bool = false
     @State private var isSigningIn: Bool = false
+    @State private var isSigningInWithGoogle: Bool = false
 
     private let oauthClientFactory: @MainActor () -> ChatGPTOAuthClient
+    private let googleOAuthClientFactory: @MainActor () -> AntigravityOAuthClient
 
     public init(
         oauthClientFactory: @escaping @MainActor () -> ChatGPTOAuthClient = {
             ChatGPTOAuthClientFactory.makeDefault()
+        },
+        googleOAuthClientFactory: @escaping @MainActor () -> AntigravityOAuthClient = {
+            AntigravityOAuthClientFactory.makeDefault()
         }
     ) {
         self.oauthClientFactory = oauthClientFactory
+        self.googleOAuthClientFactory = googleOAuthClientFactory
     }
 
     public var body: some View {
@@ -64,6 +70,68 @@ public struct LoginSheetView: View {
                         }
 
                         Divider()
+
+                        // Google OAuth (Antigravity only)
+                        if selectedTab == .antigravity {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Google Account")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+
+                                Button {
+                                    performGoogleLogin()
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        if isSigningInWithGoogle {
+                                            ProgressView()
+                                                .tint(.white)
+                                        } else {
+                                            Image(systemName: "globe")
+                                        }
+                                        Text(isSigningInWithGoogle ? "Signing in…" : "Sign in with Google")
+                                    }
+                                    .font(.subheadline.bold())
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(
+                                        Color(red: 0.26, green: 0.52, blue: 0.96),
+                                        in: RoundedRectangle(cornerRadius: 10)
+                                    )
+                                }
+                                .disabled(isSigningInWithGoogle || authManager.antigravityAuthState.isBusy)
+
+                                HStack(alignment: .top, spacing: 6) {
+                                    Image(systemName: googleStatusIcon)
+                                        .font(.caption2)
+                                        .foregroundColor(googleStatusColor)
+                                    Text(authManager.antigravityAuthState.statusText)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                if authManager.antigravityAuthMethod == .google && authManager.antigravityCreds.isLoggedIn {
+                                    Button {
+                                        authManager.logout(type: .antigravity)
+                                        apiKeyInput = ""
+                                        identifierInput = ""
+                                        statusMessage = "Signed out of Google."
+                                        isSuccess = false
+                                    } label: {
+                                        Text("Sign out of Google")
+                                            .font(.caption.bold())
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                            }
+
+                            Divider()
+
+                            Text("Manual API key (fallback)")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                        }
 
                         // ChatGPT OAuth (Codex only)
                         if selectedTab == .codex {
@@ -289,6 +357,48 @@ public struct LoginSheetView: View {
         case .authorizing, .exchanging: return .orange
         case .signedIn: return .green
         case .failed: return .orange
+        }
+    }
+
+    private var googleStatusIcon: String {
+        switch authManager.antigravityAuthState {
+        case .signedOut: return "circle"
+        case .authorizing, .exchanging: return "arrow.triangle.2.circlepath"
+        case .signedIn: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var googleStatusColor: Color {
+        switch authManager.antigravityAuthState {
+        case .signedOut: return .secondary
+        case .authorizing, .exchanging: return .orange
+        case .signedIn: return .green
+        case .failed: return .orange
+        }
+    }
+
+    private func performGoogleLogin() {
+        guard !isSigningInWithGoogle else { return }
+        isSigningInWithGoogle = true
+        statusMessage = nil
+        isSuccess = false
+
+        Task { @MainActor in
+            let client = googleOAuthClientFactory()
+            let success = await authManager.signInWithGoogle(using: client)
+            isSigningInWithGoogle = false
+
+            if success {
+                let creds = authManager.credentials(for: .antigravity)
+                apiKeyInput = ""
+                identifierInput = creds.identifier
+                statusMessage = "Signed in with Google as \(creds.identifier)."
+                isSuccess = true
+            } else {
+                statusMessage = authManager.antigravityAuthState.statusText
+                isSuccess = false
+            }
         }
     }
 

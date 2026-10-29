@@ -111,6 +111,56 @@ public enum ChatGPTAuthState: Equatable, Sendable {
     }
 }
 
+/// How the Antigravity provider is currently authenticated.
+public enum AntigravityAuthMethod: String, Codable, Sendable {
+    /// A manually pasted API key/token stored in `ServiceCredentials`.
+    case apiKey
+    /// A Google OAuth session whose tokens live in the Keychain.
+    case google
+}
+
+/// Observable state of the Antigravity "Sign in with Google" flow.
+public enum AntigravityAuthState: Equatable, Sendable {
+    case signedOut
+    case authorizing
+    case exchanging
+    case signedIn(identifier: String, expiresAt: Date?)
+    case failed(String)
+
+    public var isSignedIn: Bool {
+        if case .signedIn = self { return true }
+        return false
+    }
+
+    public var isBusy: Bool {
+        switch self {
+        case .authorizing, .exchanging: return true
+        default: return false
+        }
+    }
+
+    public var statusText: String {
+        switch self {
+        case .signedOut:
+            return "Not signed in with Google."
+        case .authorizing:
+            return "Waiting for Google sign-in in the browser…"
+        case .exchanging:
+            return "Finishing sign-in…"
+        case let .signedIn(identifier, expiresAt):
+            if let expiresAt {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .short
+                formatter.timeStyle = .short
+                return "Signed in as \(identifier). Token valid until \(formatter.string(from: expiresAt))."
+            }
+            return "Signed in as \(identifier)."
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
 @MainActor
 public class AuthManager: ObservableObject {
     public static let shared = AuthManager()
@@ -127,27 +177,41 @@ public class AuthManager: ObservableObject {
     @Published public private(set) var chatGPTUsage: ChatGPTUsage?
     @Published public private(set) var chatGPTUsageError: String?
 
+    /// Drives the Antigravity Google sign-in button/status in `LoginSheetView`.
+    @Published public private(set) var antigravityAuthState: AntigravityAuthState = .signedOut
+    /// Distinguishes the Google OAuth session from a manually pasted key.
+    @Published public private(set) var antigravityAuthMethod: AntigravityAuthMethod = .apiKey
+
     private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
     private let codexKey = "auth_creds_codex"
     private let opencodeKey = "auth_creds_opencode_go"
     private let codexMethodKey = "auth_method_codex"
+    private let antigravityMethodKey = "auth_method_antigravity"
 
     private let chatGPTCredentialStore: any ChatGPTCredentialStoring
     private let chatGPTOAuthNetworking: any ChatGPTOAuthNetworking
     private let chatGPTUsageService: any ChatGPTUsageFetching
     private var chatGPTTokens: ChatGPTTokens?
 
+    private let antigravityCredentialStore: any AntigravityCredentialStoring
+    private let antigravityOAuthNetworking: any AntigravityOAuthNetworking
+    private var antigravityTokens: AntigravityTokens?
+
     public init(
         storage: UserDefaults = .standard,
         chatGPTCredentialStore: any ChatGPTCredentialStoring = KeychainChatGPTCredentialStore.shared,
         chatGPTOAuthNetworking: any ChatGPTOAuthNetworking = URLSessionChatGPTOAuthNetworking(),
-        chatGPTUsageService: any ChatGPTUsageFetching = URLSessionChatGPTUsageFetcher()
+        chatGPTUsageService: any ChatGPTUsageFetching = URLSessionChatGPTUsageFetcher(),
+        antigravityCredentialStore: any AntigravityCredentialStoring = KeychainAntigravityCredentialStore.shared,
+        antigravityOAuthNetworking: any AntigravityOAuthNetworking = URLSessionAntigravityOAuthNetworking()
     ) {
         self.defaults = storage
         self.chatGPTCredentialStore = chatGPTCredentialStore
         self.chatGPTOAuthNetworking = chatGPTOAuthNetworking
         self.chatGPTUsageService = chatGPTUsageService
+        self.antigravityCredentialStore = antigravityCredentialStore
+        self.antigravityOAuthNetworking = antigravityOAuthNetworking
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
@@ -183,6 +247,29 @@ public class AuthManager: ObservableObject {
         } else {
             self.codexAuthMethod = storedMethod ?? .apiKey
         }
+
+        // Same precedence rule for Antigravity: an explicitly saved manual key
+        // wins over a stale Keychain grant.
+        let storedAntigravityMethod = storage.string(forKey: antigravityMethodKey)
+            .flatMap(AntigravityAuthMethod.init(rawValue:))
+        if storedAntigravityMethod == .apiKey {
+            self.antigravityAuthMethod = .apiKey
+        } else if let storedTokens = try? antigravityCredentialStore.load() {
+            self.antigravityTokens = storedTokens
+            self.antigravityAuthMethod = .google
+            self.antigravityCreds = ServiceCredentials(
+                apiKey: "",
+                identifier: storedTokens.identifier,
+                isLoggedIn: true,
+                lastVerified: storedTokens.expiresAt ?? Date()
+            )
+            self.antigravityAuthState = .signedIn(
+                identifier: storedTokens.identifier,
+                expiresAt: storedTokens.expiresAt
+            )
+        } else {
+            self.antigravityAuthMethod = storedAntigravityMethod ?? .apiKey
+        }
     }
 
     nonisolated public static func resetDefaults(in storage: UserDefaults = .standard) {
@@ -190,6 +277,7 @@ public class AuthManager: ObservableObject {
         storage.removeObject(forKey: "auth_creds_codex")
         storage.removeObject(forKey: "auth_creds_opencode_go")
         storage.removeObject(forKey: "auth_method_codex")
+        storage.removeObject(forKey: "auth_method_antigravity")
     }
 
     public func credentials(for type: ServiceProviderType) -> ServiceCredentials {
@@ -216,6 +304,12 @@ public class AuthManager: ObservableObject {
         case .antigravity:
             antigravityCreds = newCreds
             save(newCreds, key: agKey)
+            // Manual credentials take precedence over any previous Google
+            // session. The Keychain item is intentionally left intact but is
+            // ignored while the persisted method is `.apiKey`.
+            antigravityTokens = nil
+            antigravityAuthState = .signedOut
+            setAntigravityAuthMethod(.apiKey)
         case .codex:
             codexCreds = newCreds
             save(newCreds, key: codexKey)
@@ -236,6 +330,7 @@ public class AuthManager: ObservableObject {
         let cleared = ServiceCredentials(apiKey: "", identifier: "", isLoggedIn: false, lastVerified: nil)
         switch type {
         case .antigravity:
+            signOutAntigravity()
             antigravityCreds = cleared
             save(cleared, key: agKey)
         case .codex:
@@ -246,6 +341,134 @@ public class AuthManager: ObservableObject {
             opencodeGoCreds = cleared
             save(cleared, key: opencodeKey)
         }
+    }
+
+    // MARK: - Antigravity Google OAuth
+
+    /// Runs the real Google Authorization Code + PKCE flow through the supplied
+    /// client. On success the access/refresh tokens are stored in the Keychain
+    /// and the Google account email (or a generic label) becomes the
+    /// Antigravity provider identifier.
+    @discardableResult
+    public func signInWithGoogle(using client: AntigravityOAuthClient) async -> Bool {
+        guard !antigravityAuthState.isBusy else { return false }
+
+        antigravityAuthState = .authorizing
+        do {
+            let tokens = try await client.authorize()
+            antigravityAuthState = .exchanging
+            try antigravityCredentialStore.save(tokens)
+            applyAntigravityTokens(tokens)
+            return true
+        } catch is CancellationError {
+            antigravityAuthState = .failed(AntigravityOAuthError.cancelled.userMessage)
+            return false
+        } catch let error as AntigravityOAuthError {
+            antigravityAuthState = .failed(error.userMessage)
+            return false
+        } catch {
+            antigravityAuthState = .failed("Sign-in failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Returns a usable Google access token, refreshing it when it is within the
+    /// 60-second expiry skew. Throws `.notSignedIn` when no OAuth session exists.
+    public func antigravityAccessToken(now: Date = Date()) async throws -> String {
+        try await refreshAntigravityTokensIfNeeded(now: now).accessToken
+    }
+
+    /// Refreshes the Google grant if required. A rejected refresh token signs the
+    /// user out rather than silently reusing expired credentials.
+    @discardableResult
+    public func refreshAntigravityTokensIfNeeded(
+        now: Date = Date(),
+        force: Bool = false
+    ) async throws -> AntigravityTokens {
+        let current: AntigravityTokens
+        if let tokens = antigravityTokens {
+            current = tokens
+        } else if antigravityAuthMethod == .google,
+                  let stored = try antigravityCredentialStore.load() {
+            current = stored
+            antigravityTokens = stored
+        } else {
+            throw AntigravityOAuthError.notSignedIn
+        }
+
+        if !force, !current.isExpired(at: now) {
+            return current
+        }
+        guard let refreshToken = current.refreshToken, !refreshToken.isEmpty else {
+            throw AntigravityOAuthError.missingRefreshToken
+        }
+
+        antigravityAuthState = .exchanging
+        do {
+            let response = try await antigravityOAuthNetworking.refreshToken(
+                AntigravityOAuthRefreshRequest(
+                    configuration: .defaultConfiguration(),
+                    refreshToken: refreshToken
+                )
+            )
+            let refreshed = try AntigravityTokens(
+                response: response,
+                previous: current,
+                now: now
+            )
+            try antigravityCredentialStore.save(refreshed)
+            applyAntigravityTokens(refreshed)
+            return refreshed
+        } catch let error as AntigravityOAuthError {
+            if case .invalidGrant = error {
+                clearAntigravitySession()
+            } else {
+                antigravityAuthState = .failed(error.userMessage)
+            }
+            throw error
+        }
+    }
+
+    /// Clears the Google OAuth session and its Keychain item. Manual credentials
+    /// are cleared separately by `logout(type: .antigravity)`.
+    public func signOutAntigravity() {
+        antigravityTokens = nil
+        try? antigravityCredentialStore.delete()
+        antigravityAuthState = .signedOut
+        if antigravityAuthMethod == .google {
+            setAntigravityAuthMethod(.apiKey)
+        }
+    }
+
+    private func applyAntigravityTokens(_ tokens: AntigravityTokens) {
+        antigravityTokens = tokens
+        setAntigravityAuthMethod(.google)
+        antigravityCreds = ServiceCredentials(
+            apiKey: "",
+            identifier: tokens.identifier,
+            isLoggedIn: true,
+            lastVerified: tokens.expiresAt ?? Date()
+        )
+        save(antigravityCreds, key: agKey)
+        antigravityAuthState = .signedIn(
+            identifier: tokens.identifier,
+            expiresAt: tokens.expiresAt
+        )
+    }
+
+    private func clearAntigravitySession() {
+        antigravityTokens = nil
+        try? antigravityCredentialStore.delete()
+        setAntigravityAuthMethod(.apiKey)
+        antigravityAuthState = .signedOut
+        let cleared = ServiceCredentials(apiKey: "", identifier: "", isLoggedIn: false, lastVerified: nil)
+        antigravityCreds = cleared
+        save(cleared, key: agKey)
+    }
+
+    private func setAntigravityAuthMethod(_ method: AntigravityAuthMethod) {
+        antigravityAuthMethod = method
+        defaults.set(method.rawValue, forKey: antigravityMethodKey)
     }
 
     // MARK: - ChatGPT OAuth

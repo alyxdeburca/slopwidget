@@ -14,23 +14,33 @@ import Network
 
 // MARK: - Loopback callback listener
 
-/// Short-lived HTTP listener for the OAuth loopback redirect.
+/// Short-lived HTTP listener for an OAuth loopback redirect.
 ///
 /// OpenAI's native client only registers `http://127.0.0.1:1455/auth/callback`
-/// (with 1457 as a fallback), so a custom URL scheme cannot be used. The listener
-/// binds before the browser is opened; the redirect lands here and the captured
-/// code is handed back to `ChatGPTOAuthClient`.
+/// (with 1457 as a fallback), so a custom URL scheme cannot be used. Google's
+/// installed-app client instead accepts any loopback port with a root callback
+/// path, so it passes `ports: [0]` and `callbackPath: "/"`. The listener binds
+/// before the browser is opened; the redirect lands here and the captured code
+/// is handed back to the OAuth client. The port actually bound is reported by
+/// `start()` so every later request uses the same redirect URI.
 actor LoopbackHTTPServer {
     private let ports: [UInt16]
+    private let callbackPath: String
     private var listener: NWListener?
     private var baseURL: URL?
     private var waiter: CheckedContinuation<URL, Error>?
     private var completed: Result<URL, Error>?
     private var cancelled = false
-    private let logger = Logger(subsystem: "com.example.slopWidget", category: "ChatGPTAuth")
+    private let logger: Logger
 
-    init(ports: [UInt16] = [1455, 1457]) {
+    init(
+        ports: [UInt16] = [1455, 1457],
+        callbackPath: String = "/auth/callback",
+        loggerCategory: String = "ChatGPTAuth"
+    ) {
         self.ports = ports
+        self.callbackPath = callbackPath
+        self.logger = Logger(subsystem: "com.example.slopWidget", category: loggerCategory)
     }
 
     /// Binds the first available port and returns the redirect URI.
@@ -38,11 +48,11 @@ actor LoopbackHTTPServer {
         var lastError: Error = ChatGPTOAuthError.failedToStartCallbackListener
         for port in ports {
             do {
-                try await bind(port: port)
-                logger.info("Loopback listener bound on 127.0.0.1:\(port)")
-                let baseURL = URL(string: "http://127.0.0.1:\(port)")!
+                let boundPort = try await bind(port: port)
+                logger.info("Loopback listener bound on 127.0.0.1:\(boundPort)")
+                let baseURL = URL(string: "http://127.0.0.1:\(boundPort)")!
                 self.baseURL = baseURL
-                return URL(string: "/auth/callback", relativeTo: baseURL)!.absoluteURL
+                return URL(string: callbackPath, relativeTo: baseURL)!.absoluteURL
             } catch {
                 lastError = error
             }
@@ -74,7 +84,8 @@ actor LoopbackHTTPServer {
         }
     }
 
-    private func bind(port: UInt16) async throws {
+    /// Binds the requested port and returns the port actually assigned.
+    private func bind(port: UInt16) async throws -> UInt16 {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw ChatGPTOAuthError.failedToStartCallbackListener
         }
@@ -93,13 +104,12 @@ actor LoopbackHTTPServer {
         }
 
         let ready = ReadyGate()
-        listener.stateUpdateHandler = { state in
+        listener.stateUpdateHandler = { [logger] state in
             switch state {
             case .ready:
                 ready.succeed()
             case let .failed(error):
-                Logger(subsystem: "com.example.slopWidget", category: "ChatGPTAuth")
-                    .error("Loopback listener failed: \(String(describing: error), privacy: .public)")
+                logger.error("Loopback listener failed: \(String(describing: error), privacy: .public)")
                 ready.fail(error)
             case .cancelled:
                 ready.fail(ChatGPTOAuthError.failedToStartCallbackListener)
@@ -117,6 +127,15 @@ actor LoopbackHTTPServer {
             self.listener = nil
             throw ChatGPTOAuthError.cancelled
         }
+
+        // `.ready` populates `port`, including the ephemeral port chosen when
+        // the caller asked to bind port 0.
+        guard let boundPort = listener.port?.rawValue else {
+            listener.cancel()
+            self.listener = nil
+            throw ChatGPTOAuthError.failedToStartCallbackListener
+        }
+        return boundPort
     }
 
     private func accept(_ connection: NWConnection) {
@@ -144,7 +163,7 @@ actor LoopbackHTTPServer {
 
         let path = url.path
         logger.info("Loopback request received for path \(path, privacy: .public)")
-        if path == "/auth/callback" {
+        if path == callbackPath {
             respond(
                 connection: connection,
                 status: "200 OK",
