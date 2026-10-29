@@ -324,10 +324,18 @@ struct slopWidget: @preconcurrency Widget {
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: UsageWidgetProvider()) { entry in
-            Button(intent: CycleOpenCodeMeterIntent()) {
+            ZStack {
                 UsageWidgetEntryView(entry: entry)
+                // A full-surface transparent button makes the whole widget
+                // tappable on iOS 17+ without wrapping the complex layout in
+                // the button label.
+                Button(intent: CycleOpenCodeMeterIntent()) {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName("AI Usage Stats")
