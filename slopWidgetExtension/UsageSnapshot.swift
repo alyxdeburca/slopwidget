@@ -46,10 +46,9 @@ public enum SharedUsageStore {
     /// The free provisioning profile grants keychain access group `<TEAM>.*`.
     /// The app bundle ID is `XTL-<TEAM>.<bundle>` in xtool-signed builds.
     public static var accessGroup: String? {
-        // Both targets share this explicit team-scoped group. Deriving it from
-        // Bundle.main.bundleIdentifier is unreliable because the extension can
-        // report a different (unprefixed) CFBundleIdentifier at runtime.
-        "L25T52S232.slopWidget.usage"
+        // Use the app's own keychain access group. The extension profile grants
+        // the team wildcard, so the widget can read the app's item.
+        "L25T52S232.XTL-L25T52S232.com.example.slopWidget"
     }
 
     public static func save(_ snapshot: UsageSnapshot) throws {
