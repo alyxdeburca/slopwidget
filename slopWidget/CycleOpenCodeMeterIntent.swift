@@ -4,10 +4,10 @@ import AppIntents
 import WidgetKit
 #endif
 
-/// Registered in the app target as well as the widget extension so the widget
-/// interaction can be discovered reliably.
+/// Exposed by the app target so widget interactions can resolve its metadata.
 struct CycleOpenCodeMeterIntent: AppIntent {
-    static let title: LocalizedStringResource = "Cycle OpenCode Usage Window"
+    static var title: LocalizedStringResource { "Cycle OpenCode Usage Window" }
+    static var openAppWhenRun: Bool { false }
 
     func perform() async throws -> some IntentResult {
         var snapshot = SharedUsageStore.load() ?? UsageSnapshot()

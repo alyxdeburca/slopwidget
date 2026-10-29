@@ -74,10 +74,22 @@ struct UsageWidgetEntry: TimelineEntry {
     let date: Date
     let providers: [ProviderUsage]
 
+    /// Providers that report a number participate in the average. A provider
+    /// with no usage data (for example Antigravity, which renders "—") has no
+    /// quota to average, so including it would pull the number down.
+    var averagedProviders: [ProviderUsage] {
+        providers.filter(\.hasUsageData)
+    }
+
     var averagePercentageInt: Int {
-        guard !providers.isEmpty else { return 0 }
-        let total = providers.map(\.percentage).reduce(0, +)
-        return Int((total / Double(providers.count)) * 100)
+        guard !averagedProviders.isEmpty else { return 0 }
+        let total = averagedProviders.map(\.percentage).reduce(0, +)
+        return Int((total / Double(averagedProviders.count)) * 100)
+    }
+
+    /// "—" when no provider reports a numeric quota.
+    var averageText: String {
+        averagedProviders.isEmpty ? "—" : "\(averagePercentageInt)%"
     }
 }
 
@@ -167,7 +179,7 @@ struct UsageWidgetEntryView: View {
                     .font(.caption2.bold())
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(entry.averagePercentageInt)%")
+                Text(entry.averageText)
                     .font(.caption2.bold())
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -225,7 +237,7 @@ struct UsageWidgetEntryView: View {
                         .font(.footnote.bold())
                 }
                 Spacer()
-                Text("Avg \(entry.averagePercentageInt)%")
+                Text("Avg \(entry.averageText)")
                     .font(.caption2.bold())
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
@@ -292,7 +304,7 @@ struct UsageWidgetEntryView: View {
         Gauge(value: Double(entry.averagePercentageInt), in: 0...100) {
             Image(systemName: "cpu.fill")
         } currentValueLabel: {
-            Text("\(entry.averagePercentageInt)")
+            Text(entry.averageText)
                 .font(.system(size: 11, weight: .bold))
         }
         .gaugeStyle(.accessoryCircular)
@@ -305,7 +317,7 @@ struct UsageWidgetEntryView: View {
                 Image(systemName: "cpu.fill")
                 Text("AI Usage").font(.caption.bold())
                 Spacer()
-                Text("\(entry.averagePercentageInt)%").font(.caption.bold())
+                Text(entry.averageText).font(.caption.bold())
             }
             Text("AG: 42% \u{2022} Codex: 88% \u{2022} OC: 30%")
                 .font(.system(size: 10))
