@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 // MARK: - Data Models
 
@@ -403,6 +406,8 @@ public struct ContentView: View {
     @State private var selectedTab: Int = 0
     @State private var showingLoginSheet: Bool = false
     @State private var isRefreshingUsage: Bool = false
+    @State private var isRefreshingWidget: Bool = false
+    @State private var widgetRefreshStatus: String?
 
     public init() {}
 
@@ -449,12 +454,32 @@ public struct ContentView: View {
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
 
                     // Header
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("AI Usage Widget Gallery")
-                            .font(.title.bold())
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("AI Usage Widget Gallery")
+                                .font(.title.bold())
+                            Spacer()
+                            Button {
+                                Task { await refreshWidget() }
+                            } label: {
+                                if isRefreshingWidget {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Label("Refresh Widget", systemImage: "arrow.triangle.2.circlepath")
+                                        .font(.caption.bold())
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isRefreshingWidget)
+                        }
                         Text("Live preview of 1x1, 1x2, 1x3, and 2x2 widget formats.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                        if let widgetRefreshStatus {
+                            Text(widgetRefreshStatus)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     // Widget Selector Tabs
@@ -548,6 +573,21 @@ public struct ContentView: View {
                 replaceCodexProvider(with: usage.providerUsageItem)
             }
         }
+    }
+
+    @MainActor
+    private func refreshWidget() async {
+        guard !isRefreshingWidget else { return }
+        isRefreshingWidget = true
+        defer { isRefreshingWidget = false }
+        await authManager.refreshChatGPTUsage()
+        if let usage = authManager.chatGPTUsage {
+            replaceCodexProvider(with: usage.providerUsageItem)
+        }
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
+        widgetRefreshStatus = "Widget refreshed at \(Date().formatted(date: .omitted, time: .shortened))."
     }
 
     @MainActor
