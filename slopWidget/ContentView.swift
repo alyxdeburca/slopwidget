@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Data Models
 
-public struct ProviderUsageItem: Identifiable {
+public struct ProviderUsageItem: Identifiable, Sendable {
     public let id: String
     public var name: String
     public var shortName: String
@@ -35,6 +35,7 @@ public struct ProviderUsageItem: Identifiable {
     }
 }
 
+@MainActor
 public enum SampleUsageData {
     public static let providers: [ProviderUsageItem] = [
         ProviderUsageItem(
@@ -80,8 +81,9 @@ public enum SampleUsageData {
 
 // MARK: - 1x1 Widget (Compact Square)
 public struct Widget1x1View: View {
-    public var providers: [ProviderUsageItem] = SampleUsageData.providers
+    public var providers: [ProviderUsageItem]
 
+    @MainActor
     public init(providers: [ProviderUsageItem] = SampleUsageData.providers) {
         self.providers = providers
     }
@@ -140,8 +142,9 @@ public struct Widget1x1View: View {
 
 // MARK: - 1x2 Widget (Horizontal 2-Card)
 public struct Widget1x2View: View {
-    public var providers: [ProviderUsageItem] = SampleUsageData.providers
+    public var providers: [ProviderUsageItem]
 
+    @MainActor
     public init(providers: [ProviderUsageItem] = SampleUsageData.providers) {
         self.providers = providers
     }
@@ -219,8 +222,9 @@ public struct Widget1x2View: View {
 
 // MARK: - 1x3 Widget (Panoramic 3-Column Strip)
 public struct Widget1x3View: View {
-    public var providers: [ProviderUsageItem] = SampleUsageData.providers
+    public var providers: [ProviderUsageItem]
 
+    @MainActor
     public init(providers: [ProviderUsageItem] = SampleUsageData.providers) {
         self.providers = providers
     }
@@ -286,8 +290,9 @@ public struct Widget1x3View: View {
 
 // MARK: - 2x2 Widget (Large Square Dashboard)
 public struct Widget2x2View: View {
-    public var providers: [ProviderUsageItem] = SampleUsageData.providers
+    public var providers: [ProviderUsageItem]
 
+    @MainActor
     public init(providers: [ProviderUsageItem] = SampleUsageData.providers) {
         self.providers = providers
     }
@@ -393,8 +398,10 @@ public struct Widget2x2View: View {
 
 // MARK: - Main Application View
 public struct ContentView: View {
-    @State private var providers: [ProviderUsageItem] = SampleUsageData.providers
+    @ObservedObject private var authManager = AuthManager.shared
+    @State private var providers: [ProviderUsageItem] = []
     @State private var selectedTab: Int = 0
+    @State private var showingLoginSheet: Bool = false
 
     public init() {}
 
@@ -402,10 +409,36 @@ public struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    // Connected Accounts Quick Banner
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Connected Services", systemImage: "key.fill")
+                                .font(.headline)
+                            Spacer()
+                            Button {
+                                showingLoginSheet = true
+                            } label: {
+                                Text("Manage")
+                                    .font(.caption.bold())
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(Color.accentColor.opacity(0.15), in: Capsule())
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            servicePill(type: .antigravity)
+                            servicePill(type: .codex)
+                            servicePill(type: .opencodeGo)
+                        }
+                    }
+                    .padding(16)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+
                     // Header
                     VStack(alignment: .leading, spacing: 6) {
                         Text("AI Usage Widget Gallery")
-                            .font(.largeTitle.bold())
+                            .font(.title.bold())
                         Text("Live preview of 1x1, 1x2, 1x3, and 2x2 widget formats.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -477,7 +510,42 @@ public struct ContentView: View {
                 .padding()
             }
             .navigationTitle("Widgets")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingLoginSheet = true
+                    } label: {
+                        Image(systemName: "person.crop.circle.badge.checkmark")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingLoginSheet) {
+                LoginSheetView()
+            }
+            .onAppear {
+                if providers.isEmpty {
+                    providers = SampleUsageData.providers
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func servicePill(type: ServiceProviderType) -> some View {
+        let creds = authManager.credentials(for: type)
+        HStack(spacing: 4) {
+            Image(systemName: type.icon)
+                .font(.system(size: 10))
+                .foregroundColor(type.brandColor)
+            Text(type.displayName)
+                .font(.system(size: 10, weight: .semibold))
+            Circle()
+                .fill(creds.isLoggedIn ? Color.green : Color.secondary.opacity(0.4))
+                .frame(width: 6, height: 6)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(.tertiarySystemBackground), in: Capsule())
     }
 }
 
