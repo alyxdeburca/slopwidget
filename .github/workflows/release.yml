@@ -26,8 +26,8 @@ jobs:
 
       - name: Install xtool
         run: |
-          curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/xtool-org/xtool/main/install.sh | bash
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          brew install xtool-org/xtool/xtool
+          xtool --version
 
       - name: Generate Xcode project
         run: |

@@ -28,6 +28,13 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           isim toolchain install
 
+      - name: Install xtool
+        run: |
+          curl -fL "https://github.com/xtool-org/xtool/releases/latest/download/xtool-$(uname -m).AppImage" -o xtool
+          chmod +x xtool
+          sudo mv xtool /usr/local/bin/
+          xtool --version
+
       - name: Build app (simulator)
         run: |
           export PATH="$HOME/.local/bin:$PATH"
