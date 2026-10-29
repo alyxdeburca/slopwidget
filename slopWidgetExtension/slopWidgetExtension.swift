@@ -187,9 +187,22 @@ struct UsageWidgetEntryView: View {
                                 .font(.system(size: 10, weight: .semibold))
                                 .lineLimit(1)
                             Spacer()
-                            Text(provider.percentageText)
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(provider.color)
+                            if provider.id == "opencode-go" {
+                                Button(intent: CycleOpenCodeMeterIntent()) {
+                                    HStack(spacing: 2) {
+                                        Text(provider.percentageText)
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                            .font(.system(size: 7, weight: .bold))
+                                    }
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(provider.color)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                Text(provider.percentageText)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(provider.color)
+                            }
                         }
                         ProgressView(value: provider.percentage)
                             .tint(provider.color)
@@ -233,9 +246,22 @@ struct UsageWidgetEntryView: View {
 
                         Spacer()
 
-                        Text(provider.percentageText)
-                            .font(.system(size: 20, weight: .heavy, design: .rounded))
-                            .foregroundColor(provider.color)
+                        if provider.id == "opencode-go" {
+                            Button(intent: CycleOpenCodeMeterIntent()) {
+                                HStack(spacing: 3) {
+                                    Text(provider.percentageText)
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 9, weight: .bold))
+                                }
+                                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                                .foregroundColor(provider.color)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text(provider.percentageText)
+                                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                                .foregroundColor(provider.color)
+                        }
 
                         ProgressView(value: provider.percentage)
                             .tint(provider.color)
@@ -292,9 +318,11 @@ struct UsageWidgetEntryView: View {
 
 /// Tapping the widget cycles the OpenCode Go window.
 struct CycleOpenCodeMeterIntent: AppIntent {
-    static let title: LocalizedStringResource = "Cycle OpenCode Usage Window"
+    static var title: LocalizedStringResource { "Cycle OpenCode Usage Window" }
+    static var openAppWhenRun: Bool { false }
 
     func perform() async throws -> some IntentResult {
+        NSLog("CycleOpenCodeMeterIntent fired")
         var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
         let order = ["rolling", "weekly", "monthly"]
         let current = snapshot.openCodeMeterSelection ?? "weekly"
@@ -325,7 +353,6 @@ struct slopWidget: @preconcurrency Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: UsageWidgetProvider()) { entry in
             UsageWidgetEntryView(entry: entry)
-                .widgetURL(URL(string: "slopwidget://cycle"))
                 .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName("AI Usage Stats")
