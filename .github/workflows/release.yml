@@ -26,7 +26,7 @@ jobs:
 
       - name: Install xtool
         run: |
-          brew install xtool-org/xtool/xtool
+          brew install xtool-org/tap/xtool
           xtool --version
 
       - name: Generate Xcode project
