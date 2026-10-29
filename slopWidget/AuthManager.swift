@@ -371,7 +371,6 @@ public class AuthManager: ObservableObject {
         } else {
             self.openCodeAuthMethod = storedOpenCodeMethod ?? .apiKey
         }
-        }
     }
 
     nonisolated public static func resetDefaults(in storage: UserDefaults = .standard) {
