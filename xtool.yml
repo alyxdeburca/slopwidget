@@ -1,6 +1,9 @@
 version: 1
 bundleID: com.example.slopWidget
 product: slopWidget
+infoPath: slopWidget-Info.plist
+resources:
+  - AppIntentsMetadata/Metadata.appintents
 extensions:
   - product: slopWidgetExtension
     infoPath: slopWidgetExtension-Info.plist

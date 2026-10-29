@@ -1,5 +1,7 @@
 import WidgetKit
 import SwiftUI
+import Foundation
+import AppIntents
 
 // MARK: - Usage Model
 
@@ -12,6 +14,8 @@ struct ProviderUsage: Identifiable {
     var requestLimit: Int
     var tokensUsed: String
     var status: String
+    var hasRequestCount: Bool = true
+    var hasUsageData: Bool = true
 
     var percentage: Double {
         guard requestLimit > 0 else { return 0 }
@@ -20,6 +24,10 @@ struct ProviderUsage: Identifiable {
 
     var percentageInt: Int {
         Int(percentage * 100)
+    }
+
+    var percentageText: String {
+        hasUsageData ? "\(percentageInt)%" : "—"
     }
 }
 
@@ -30,10 +38,11 @@ enum UsageData {
             name: "Antigravity",
             icon: "sparkles",
             color: Color(red: 0.65, green: 0.40, blue: 0.98),
-            requestsUsed: 42,
+            requestsUsed: 0,
             requestLimit: 100,
-            tokensUsed: "740k",
-            status: "Active"
+            tokensUsed: "—",
+            status: "Not synced",
+            hasUsageData: false
         ),
         ProviderUsage(
             id: "codex",
@@ -50,10 +59,11 @@ enum UsageData {
             name: "OpenCode Go",
             icon: "bolt.fill",
             color: Color(red: 0.25, green: 0.65, blue: 0.98),
-            requestsUsed: 15,
+            requestsUsed: 0,
             requestLimit: 50,
-            tokensUsed: "310k",
-            status: "Normal"
+            tokensUsed: "—",
+            status: "Not synced",
+            hasUsageData: false
         )
     ]
 }
@@ -64,10 +74,22 @@ struct UsageWidgetEntry: TimelineEntry {
     let date: Date
     let providers: [ProviderUsage]
 
+    /// Providers that report a number participate in the average. A provider
+    /// with no usage data (for example Antigravity, which renders "—") has no
+    /// quota to average, so including it would pull the number down.
+    var averagedProviders: [ProviderUsage] {
+        providers.filter(\.hasUsageData)
+    }
+
     var averagePercentageInt: Int {
-        guard !providers.isEmpty else { return 0 }
-        let total = providers.map(\.percentage).reduce(0, +)
-        return Int((total / Double(providers.count)) * 100)
+        guard !averagedProviders.isEmpty else { return 0 }
+        let total = averagedProviders.map(\.percentage).reduce(0, +)
+        return Int((total / Double(averagedProviders.count)) * 100)
+    }
+
+    /// "—" when no provider reports a numeric quota.
+    var averageText: String {
+        averagedProviders.isEmpty ? "—" : "\(averagePercentageInt)%"
     }
 }
 
@@ -77,54 +99,54 @@ struct UsageWidgetProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageWidgetEntry) -> Void) {
-        let entry = UsageWidgetEntry(date: Date(), providers: UsageData.defaultProviders)
-        completion(entry)
+        completion(UsageWidgetEntry(date: Date(), providers: currentProviders()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageWidgetEntry>) -> Void) {
         let currentDate = Date()
-        var entries: [UsageWidgetEntry] = []
+        let entry = UsageWidgetEntry(date: currentDate, providers: currentProviders())
+        completion(Timeline(entries: [entry], policy: .after(currentDate.addingTimeInterval(15 * 60))))
+    }
 
-        // Create sample timeline with minor placeholder variations over time
-        for minuteOffset in stride(from: 0, to: 60, by: 15) {
-            guard let entryDate = Calendar.current.date(byAdding: .minute, value: minuteOffset, to: currentDate) else { continue }
-            let providers = [
-                ProviderUsage(
-                    id: "antigravity",
-                    name: "Antigravity",
-                    icon: "sparkles",
-                    color: Color(red: 0.65, green: 0.40, blue: 0.98),
-                    requestsUsed: min(100, 42 + minuteOffset / 5),
-                    requestLimit: 100,
-                    tokensUsed: "\(740 + minuteOffset * 8)k",
-                    status: "Active"
-                ),
-                ProviderUsage(
-                    id: "codex",
-                    name: "Codex",
-                    icon: "terminal.fill",
-                    color: Color(red: 0.20, green: 0.80, blue: 0.58),
-                    requestsUsed: min(100, 88 + minuteOffset / 10),
-                    requestLimit: 100,
-                    tokensUsed: "1.8M",
-                    status: "High"
-                ),
-                ProviderUsage(
-                    id: "opencode-go",
-                    name: "OpenCode Go",
-                    icon: "bolt.fill",
-                    color: Color(red: 0.25, green: 0.65, blue: 0.98),
-                    requestsUsed: min(50, 15 + minuteOffset / 6),
-                    requestLimit: 50,
-                    tokensUsed: "\(310 + minuteOffset * 4)k",
-                    status: "Normal"
-                )
-            ]
-            entries.append(UsageWidgetEntry(date: entryDate, providers: providers))
+    /// Read the snapshot the app writes to the shared keychain. Fall back to
+    /// the sample values when no live fetch has happened yet.
+    private func currentProviders() -> [ProviderUsage] {
+        guard let snapshot = SharedUsageStore.load() else {
+            return UsageData.defaultProviders
         }
-
-        let timeline = Timeline(entries: entries, policy: .atEnd)
-        completion(timeline)
+        return UsageData.defaultProviders.map { base in
+            guard let record = snapshot.records[base.id] else { return base }
+            if base.id == "opencode-go", let meters = snapshot.openCodeMeters {
+                let selection = UserDefaults.standard.string(forKey: "opencodeMeterSelection")
+                    ?? snapshot.openCodeMeterSelection
+                    ?? "weekly"
+                let percent = meters.percent(for: selection) ?? record.usedPercent
+                return ProviderUsage(
+                    id: base.id,
+                    name: base.name,
+                    icon: base.icon,
+                    color: base.color,
+                    requestsUsed: min(100, max(0, Int(percent.rounded()))),
+                    requestLimit: 100,
+                    tokensUsed: selection.capitalized,
+                    status: record.status,
+                    hasRequestCount: false,
+                    hasUsageData: true
+                )
+            }
+            return ProviderUsage(
+                id: base.id,
+                name: base.name,
+                icon: base.icon,
+                color: base.color,
+                requestsUsed: min(100, max(0, Int(record.usedPercent.rounded()))),
+                requestLimit: 100,
+                tokensUsed: record.detail,
+                status: record.status,
+                hasRequestCount: record.hasRequestCount ?? true,
+                hasUsageData: record.hasUsageData ?? true
+            )
+        }
     }
 }
 
@@ -157,7 +179,7 @@ struct UsageWidgetEntryView: View {
                     .font(.caption2.bold())
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(entry.averagePercentageInt)%")
+                Text(entry.averageText)
                     .font(.caption2.bold())
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -177,9 +199,22 @@ struct UsageWidgetEntryView: View {
                                 .font(.system(size: 10, weight: .semibold))
                                 .lineLimit(1)
                             Spacer()
-                            Text("\(provider.percentageInt)%")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(provider.color)
+                            if provider.id == "opencode-go" {
+                                Button(intent: CycleOpenCodeMeterIntent()) {
+                                    HStack(spacing: 2) {
+                                        Text(provider.percentageText)
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                            .font(.system(size: 7, weight: .bold))
+                                    }
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(provider.color)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                Text(provider.percentageText)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(provider.color)
+                            }
                         }
                         ProgressView(value: provider.percentage)
                             .tint(provider.color)
@@ -202,7 +237,7 @@ struct UsageWidgetEntryView: View {
                         .font(.footnote.bold())
                 }
                 Spacer()
-                Text("Avg \(entry.averagePercentageInt)%")
+                Text("Avg \(entry.averageText)")
                     .font(.caption2.bold())
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
@@ -223,18 +258,33 @@ struct UsageWidgetEntryView: View {
 
                         Spacer()
 
-                        Text("\(provider.percentageInt)%")
-                            .font(.system(size: 20, weight: .heavy, design: .rounded))
-                            .foregroundColor(provider.color)
+                        if provider.id == "opencode-go" {
+                            Button(intent: CycleOpenCodeMeterIntent()) {
+                                HStack(spacing: 3) {
+                                    Text(provider.percentageText)
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 9, weight: .bold))
+                                }
+                                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                                .foregroundColor(provider.color)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text(provider.percentageText)
+                                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                                .foregroundColor(provider.color)
+                        }
 
                         ProgressView(value: provider.percentage)
                             .tint(provider.color)
                             .scaleEffect(x: 1, y: 0.7, anchor: .center)
 
                         HStack {
-                            Text("\(provider.requestsUsed)/\(provider.requestLimit)")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
+                            if provider.hasRequestCount {
+                                Text("\(provider.requestsUsed)/\(provider.requestLimit)")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text(provider.tokensUsed)
                                 .font(.system(size: 9, weight: .semibold))
@@ -254,7 +304,7 @@ struct UsageWidgetEntryView: View {
         Gauge(value: Double(entry.averagePercentageInt), in: 0...100) {
             Image(systemName: "cpu.fill")
         } currentValueLabel: {
-            Text("\(entry.averagePercentageInt)")
+            Text(entry.averageText)
                 .font(.system(size: 11, weight: .bold))
         }
         .gaugeStyle(.accessoryCircular)
@@ -267,12 +317,35 @@ struct UsageWidgetEntryView: View {
                 Image(systemName: "cpu.fill")
                 Text("AI Usage").font(.caption.bold())
                 Spacer()
-                Text("\(entry.averagePercentageInt)%").font(.caption.bold())
+                Text(entry.averageText).font(.caption.bold())
             }
             Text("AG: 42% \u{2022} Codex: 88% \u{2022} OC: 30%")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - Interactive intent
+
+/// Tapping the widget cycles the OpenCode Go window.
+struct CycleOpenCodeMeterIntent: AppIntent {
+    static var title: LocalizedStringResource { "Cycle OpenCode Usage Window" }
+    static var openAppWhenRun: Bool { false }
+
+    func perform() async throws -> some IntentResult {
+        NSLog("CycleOpenCodeMeterIntent fired")
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        let order = ["rolling", "weekly", "monthly"]
+        let current = snapshot.openCodeMeterSelection ?? "weekly"
+        let index = order.firstIndex(of: current) ?? 1
+        let next = order[(index + 1) % order.count]
+        snapshot.openCodeMeterSelection = next
+        UserDefaults.standard.set(next, forKey: "opencodeMeterSelection")
+        try? SharedUsageStore.save(snapshot)
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        return .result()
     }
 }
 
@@ -285,13 +358,14 @@ struct slopWidgetBundle: WidgetBundle {
     }
 }
 
-struct slopWidget: Widget {
+@MainActor
+struct slopWidget: @preconcurrency Widget {
     let kind: String = "slopWidget"
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: UsageWidgetProvider()) { entry in
             UsageWidgetEntryView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName("AI Usage Stats")
         .description("Track requests and token usage for Antigravity, Codex, and OpenCode Go.")

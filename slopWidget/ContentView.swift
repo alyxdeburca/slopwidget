@@ -1,8 +1,11 @@
 import SwiftUI
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 // MARK: - Data Models
 
-public struct ProviderUsageItem: Identifiable {
+public struct ProviderUsageItem: Identifiable, Sendable {
     public let id: String
     public var name: String
     public var shortName: String
@@ -12,8 +15,11 @@ public struct ProviderUsageItem: Identifiable {
     public var requestLimit: Int
     public var tokensUsed: String
     public var status: String
+    /// False when the provider reports percentages but not request totals.
+    public var hasRequestCount: Bool
+    public var hasUsageData: Bool
 
-    public init(id: String, name: String, shortName: String, icon: String, color: Color, requestsUsed: Int, requestLimit: Int, tokensUsed: String, status: String) {
+    public init(id: String, name: String, shortName: String, icon: String, color: Color, requestsUsed: Int, requestLimit: Int, tokensUsed: String, status: String, hasRequestCount: Bool = true, hasUsageData: Bool = true) {
         self.id = id
         self.name = name
         self.shortName = shortName
@@ -23,6 +29,8 @@ public struct ProviderUsageItem: Identifiable {
         self.requestLimit = requestLimit
         self.tokensUsed = tokensUsed
         self.status = status
+        self.hasRequestCount = hasRequestCount
+        self.hasUsageData = hasUsageData
     }
 
     public var percentage: Double {
@@ -33,8 +41,13 @@ public struct ProviderUsageItem: Identifiable {
     public var percentageInt: Int {
         Int(percentage * 100)
     }
+
+    public var percentageText: String {
+        hasUsageData ? "\(percentageInt)%" : "—"
+    }
 }
 
+@MainActor
 public enum SampleUsageData {
     public static let providers: [ProviderUsageItem] = [
         ProviderUsageItem(
@@ -43,10 +56,11 @@ public enum SampleUsageData {
             shortName: "AG",
             icon: "sparkles",
             color: Color(red: 0.65, green: 0.40, blue: 0.98),
-            requestsUsed: 42,
+            requestsUsed: 0,
             requestLimit: 100,
-            tokensUsed: "740k",
-            status: "Active"
+            tokensUsed: "—",
+            status: "Not synced",
+            hasUsageData: false
         ),
         ProviderUsageItem(
             id: "codex",
@@ -65,10 +79,11 @@ public enum SampleUsageData {
             shortName: "OCG",
             icon: "bolt.fill",
             color: Color(red: 0.25, green: 0.65, blue: 0.98),
-            requestsUsed: 15,
+            requestsUsed: 0,
             requestLimit: 50,
-            tokensUsed: "310k",
-            status: "Normal"
+            tokensUsed: "—",
+            status: "Not synced",
+            hasUsageData: false
         )
     ]
 
@@ -80,8 +95,9 @@ public enum SampleUsageData {
 
 // MARK: - 1x1 Widget (Compact Square)
 public struct Widget1x1View: View {
-    public var providers: [ProviderUsageItem] = SampleUsageData.providers
+    public var providers: [ProviderUsageItem]
 
+    @MainActor
     public init(providers: [ProviderUsageItem] = SampleUsageData.providers) {
         self.providers = providers
     }
@@ -120,7 +136,7 @@ public struct Widget1x1View: View {
                                 .font(.system(size: 9, weight: .bold))
                                 .lineLimit(1)
                             Spacer()
-                            Text("\(item.percentageInt)%")
+                            Text(item.percentageText)
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundColor(item.color)
                         }
@@ -140,8 +156,9 @@ public struct Widget1x1View: View {
 
 // MARK: - 1x2 Widget (Horizontal 2-Card)
 public struct Widget1x2View: View {
-    public var providers: [ProviderUsageItem] = SampleUsageData.providers
+    public var providers: [ProviderUsageItem]
 
+    @MainActor
     public init(providers: [ProviderUsageItem] = SampleUsageData.providers) {
         self.providers = providers
     }
@@ -186,7 +203,7 @@ public struct Widget1x2View: View {
 
                         Spacer()
 
-                        Text("\(item.percentageInt)%")
+                        Text(item.percentageText)
                             .font(.system(size: 22, weight: .heavy, design: .rounded))
                             .foregroundColor(item.color)
 
@@ -195,9 +212,11 @@ public struct Widget1x2View: View {
                             .scaleEffect(x: 1, y: 0.7, anchor: .center)
 
                         HStack {
-                            Text("\(item.requestsUsed)/\(item.requestLimit)")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
+                            if item.hasRequestCount {
+                                Text("\(item.requestsUsed)/\(item.requestLimit)")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text(item.tokensUsed)
                                 .font(.system(size: 9, weight: .semibold))
@@ -219,8 +238,9 @@ public struct Widget1x2View: View {
 
 // MARK: - 1x3 Widget (Panoramic 3-Column Strip)
 public struct Widget1x3View: View {
-    public var providers: [ProviderUsageItem] = SampleUsageData.providers
+    public var providers: [ProviderUsageItem]
 
+    @MainActor
     public init(providers: [ProviderUsageItem] = SampleUsageData.providers) {
         self.providers = providers
     }
@@ -254,7 +274,7 @@ public struct Widget1x3View: View {
                         }
 
                         HStack(alignment: .firstTextBaseline) {
-                            Text("\(item.percentageInt)%")
+                            Text(item.percentageText)
                                 .font(.system(size: 16, weight: .heavy, design: .rounded))
                                 .foregroundColor(item.color)
                             Spacer()
@@ -267,9 +287,11 @@ public struct Widget1x3View: View {
                             .tint(item.color)
                             .scaleEffect(x: 1, y: 0.65, anchor: .center)
 
-                        Text("\(item.requestsUsed)/\(item.requestLimit) reqs")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
+                        if item.hasRequestCount {
+                            Text("\(item.requestsUsed)/\(item.requestLimit) reqs")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(8)
                     .frame(maxWidth: .infinity)
@@ -286,8 +308,9 @@ public struct Widget1x3View: View {
 
 // MARK: - 2x2 Widget (Large Square Dashboard)
 public struct Widget2x2View: View {
-    public var providers: [ProviderUsageItem] = SampleUsageData.providers
+    public var providers: [ProviderUsageItem]
 
+    @MainActor
     public init(providers: [ProviderUsageItem] = SampleUsageData.providers) {
         self.providers = providers
     }
@@ -347,7 +370,7 @@ public struct Widget2x2View: View {
                                 .background(item.color.opacity(0.18), in: Capsule())
                                 .foregroundColor(item.color)
 
-                            Text("\(item.percentageInt)%")
+                            Text(item.percentageText)
                                 .font(.subheadline.bold())
                                 .foregroundColor(item.color)
                         }
@@ -357,9 +380,11 @@ public struct Widget2x2View: View {
                             .scaleEffect(x: 1, y: 0.8, anchor: .center)
 
                         HStack {
-                            Text("Requests: \(item.requestsUsed) of \(item.requestLimit)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            if item.hasRequestCount {
+                                Text("Requests: \(item.requestsUsed) of \(item.requestLimit)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text("Tokens: \(item.tokensUsed)")
                                 .font(.caption2.bold())
@@ -393,8 +418,13 @@ public struct Widget2x2View: View {
 
 // MARK: - Main Application View
 public struct ContentView: View {
-    @State private var providers: [ProviderUsageItem] = SampleUsageData.providers
+    @ObservedObject private var authManager = AuthManager.shared
+    @State private var providers: [ProviderUsageItem] = []
     @State private var selectedTab: Int = 0
+    @State private var showingLoginSheet: Bool = false
+    @State private var isRefreshingUsage: Bool = false
+    @State private var isRefreshingWidget: Bool = false
+    @State private var widgetRefreshStatus: String?
 
     public init() {}
 
@@ -402,13 +432,71 @@ public struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    // Connected Accounts Quick Banner
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Connected Services", systemImage: "key.fill")
+                                .font(.headline)
+                            Spacer()
+                            HStack(spacing: 8) {
+                                Button {
+                                    Task { await refreshUsage() }
+                                } label: {
+                                    if isRefreshingUsage {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
+                                }
+                                .disabled(isRefreshingUsage)
+                                Button {
+                                    showingLoginSheet = true
+                                } label: {
+                                    Text("Manage")
+                                        .font(.caption.bold())
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(Color.accentColor.opacity(0.15), in: Capsule())
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            servicePill(type: .antigravity)
+                            servicePill(type: .codex)
+                            servicePill(type: .opencodeGo)
+                        }
+                    }
+                    .padding(16)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+
                     // Header
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("AI Usage Widget Gallery")
-                            .font(.largeTitle.bold())
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("AI Usage Widget Gallery")
+                                .font(.title.bold())
+                            Spacer()
+                            Button {
+                                Task { await refreshWidget() }
+                            } label: {
+                                if isRefreshingWidget {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Label("Refresh Widget", systemImage: "arrow.triangle.2.circlepath")
+                                        .font(.caption.bold())
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isRefreshingWidget)
+                        }
                         Text("Live preview of 1x1, 1x2, 1x3, and 2x2 widget formats.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                        if let widgetRefreshStatus {
+                            Text(widgetRefreshStatus)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     // Widget Selector Tabs
@@ -454,7 +542,11 @@ public struct ContentView: View {
                                     Text(providers[idx].name)
                                         .font(.subheadline.bold())
                                     Spacer()
-                                    Text("\(providers[idx].requestsUsed) / \(providers[idx].requestLimit) reqs (\(providers[idx].percentageInt)%)")
+                                    Text(providers[idx].hasUsageData
+                                         ? (providers[idx].hasRequestCount
+                                            ? "\(providers[idx].requestsUsed) / \(providers[idx].requestLimit) reqs (\(providers[idx].percentageInt)%)"
+                                            : "\(providers[idx].percentageInt)% used")
+                                         : "Usage not available")
                                         .font(.caption.bold())
                                         .foregroundColor(providers[idx].color)
                                 }
@@ -466,7 +558,7 @@ public struct ContentView: View {
                                     ),
                                     in: 0...Double(providers[idx].requestLimit),
                                     step: 1
-                                )
+                                    )
                                 .tint(providers[idx].color)
                             }
                             .padding(12)
@@ -477,7 +569,125 @@ public struct ContentView: View {
                 .padding()
             }
             .navigationTitle("Widgets")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingLoginSheet = true
+                    } label: {
+                        Image(systemName: "person.crop.circle.badge.checkmark")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingLoginSheet) {
+                LoginSheetView()
+            }
+            .onOpenURL { url in
+                if url.scheme == "slopwidget", url.host == "cycle" {
+                    authManager.cycleOpenCodeMeter()
+                }
+            }
+            .onAppear {
+                if providers.isEmpty {
+                    providers = SampleUsageData.providers
+                }
+            }
+            .task {
+                await refreshUsage()
+            }
+            .onChange(of: authManager.chatGPTUsage) { _, usage in
+                guard let usage else { return }
+                replaceCodexProvider(with: usage.providerUsageItem)
+            }
+            .onChange(of: authManager.openCodeUsage) { _, usage in
+                guard let usage else { return }
+                replaceOpenCodeProvider(with: usage)
+            }
         }
+    }
+
+    @MainActor
+    private func refreshWidget() async {
+        guard !isRefreshingWidget else { return }
+        isRefreshingWidget = true
+        defer { isRefreshingWidget = false }
+        await authManager.refreshChatGPTUsage()
+        await authManager.refreshOpenCodeUsage()
+        if let usage = authManager.chatGPTUsage {
+            replaceCodexProvider(with: usage.providerUsageItem)
+        }
+        if let usage = authManager.openCodeUsage {
+            replaceOpenCodeProvider(with: usage)
+        }
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        #endif
+        widgetRefreshStatus = "Widget refreshed at \(Date().formatted(date: .omitted, time: .shortened))."
+    }
+
+    @MainActor
+    private func refreshUsage() async {
+        isRefreshingUsage = true
+        defer { isRefreshingUsage = false }
+        if authManager.codexAuthMethod == .chatGPT {
+            await authManager.refreshChatGPTUsage()
+            if let usage = authManager.chatGPTUsage {
+                replaceCodexProvider(with: usage.providerUsageItem)
+            }
+        }
+        if authManager.openCodeAuthMethod == .oauth {
+            await authManager.refreshOpenCodeUsage()
+            if let usage = authManager.openCodeUsage {
+                replaceOpenCodeProvider(with: usage)
+            }
+        }
+    }
+
+    private func replaceCodexProvider(with item: ProviderUsageItem) {
+        if let index = providers.firstIndex(where: { $0.id == "codex" }) {
+            providers[index] = item
+        } else {
+            providers.append(item)
+        }
+    }
+
+    private func replaceOpenCodeProvider(with usage: OpenCodeUsage) {
+        let item = ProviderUsageItem(
+            id: "opencode-go",
+            name: "OpenCode Go",
+            shortName: "OCG",
+            icon: "bolt.fill",
+            color: Color(red: 0.25, green: 0.65, blue: 0.98),
+            requestsUsed: usage.displayPercent,
+            requestLimit: 100,
+            tokensUsed: usage.detail,
+            status: usage.statusText,
+            hasRequestCount: false,
+            hasUsageData: true
+        )
+        if let index = providers.firstIndex(where: { $0.id == "opencode-go" }) {
+            providers[index] = item
+        } else {
+            providers.append(item)
+        }
+    }
+
+    @ViewBuilder
+    private func servicePill(type: ServiceProviderType) -> some View {
+        let creds = authManager.credentials(for: type)
+        HStack(spacing: 4) {
+            Image(systemName: type.icon)
+                .font(.system(size: 10))
+                .foregroundColor(type.brandColor)
+            Text(type.displayName)
+                .font(.system(size: 10, weight: .semibold))
+            Circle()
+                .fill(creds.isLoggedIn ? Color.green : Color.secondary.opacity(0.4))
+                .frame(width: 6, height: 6)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(.tertiarySystemBackground), in: Capsule())
     }
 }
 
@@ -509,4 +719,8 @@ public struct ContentView: View {
         Color(.systemGroupedBackground).ignoresSafeArea()
         Widget2x2View()
     }
+}
+
+#Preview("MainDashboard") {
+    ContentView()
 }

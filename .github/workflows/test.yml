@@ -1,0 +1,33 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [ main, "feature/**" ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-linux:
+    name: Test Suite (Linux / isim)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm libcurl4-openssl-dev
+
+      - name: Install isim iOS Simulator & Toolchain
+        run: |
+          curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/kolabs-dev/isim/main/install.sh | bash -s -- --no-desktop
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+          isim toolchain install
+
+      - name: Run slopWidget Unit Test Suite
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          isim test -package-path . -scheme slopWidget
