@@ -105,7 +105,9 @@ struct UsageWidgetProvider: TimelineProvider {
         return UsageData.defaultProviders.map { base in
             guard let record = snapshot.records[base.id] else { return base }
             if base.id == "opencode-go", let meters = snapshot.openCodeMeters {
-                let selection = snapshot.openCodeMeterSelection ?? "weekly"
+                let selection = UserDefaults.standard.string(forKey: "opencodeMeterSelection")
+                    ?? snapshot.openCodeMeterSelection
+                    ?? "weekly"
                 let percent = meters.percent(for: selection) ?? record.usedPercent
                 return ProviderUsage(
                     id: base.id,
@@ -297,7 +299,9 @@ struct CycleOpenCodeMeterIntent: AppIntent {
         let order = ["rolling", "weekly", "monthly"]
         let current = snapshot.openCodeMeterSelection ?? "weekly"
         let index = order.firstIndex(of: current) ?? 1
-        snapshot.openCodeMeterSelection = order[(index + 1) % order.count]
+        let next = order[(index + 1) % order.count]
+        snapshot.openCodeMeterSelection = next
+        UserDefaults.standard.set(next, forKey: "opencodeMeterSelection")
         try? SharedUsageStore.save(snapshot)
         WidgetCenter.shared.reloadAllTimelines()
         WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
