@@ -11,16 +11,42 @@ Cross-platform iOS and WidgetKit project created in [T3 Code](https://t3.codes),
 
 ## Architecture & Project Structure
 
-- **[Package.swift](Package.swift)**: Swift Package Manager manifest defining both the `slopWidget` app target and `slopWidgetExtension` WidgetKit target (iOS 17+, macOS 14+).
+- **[Package.swift](Package.swift)**: Swift Package Manager manifest defining both the `slopWidget` app target, `slopWidgetExtension` WidgetKit target, and `slopWidgetTests` test suite (iOS 17+, macOS 14+).
 - **[xtool.yml](xtool.yml)**: Configuration file for `xtool`, binding the application bundle identifier (`com.example.slopWidget`) and the widget extension product.
 - **[slopWidgetExtension-Info.plist](slopWidgetExtension-Info.plist)**: Declares `com.apple.widgetkit-extension` for WidgetKit discovery.
 - **[slopWidget/](slopWidget/)**: Application source code:
   - [`slopWidgetApp.swift`](slopWidget/slopWidgetApp.swift): App scene lifecycle.
   - [`ContentView.swift`](slopWidget/ContentView.swift): App interactive dashboard and live widget preview.
+  - [`AuthManager.swift`](slopWidget/AuthManager.swift): Centralized `@MainActor` credential storage and state manager for Antigravity, Codex, and OpenCode Go.
+  - [`LoginSheetView.swift`](slopWidget/LoginSheetView.swift): Interactive account management modal sheet.
   - `Assets.xcassets`: App icons and accent colors.
 - **[slopWidgetExtension/](slopWidgetExtension/)**: Widget extension source code:
   - [`slopWidgetExtension.swift`](slopWidgetExtension/slopWidgetExtension.swift): WidgetKit `WidgetBundle`, timeline provider, and custom views for small, medium, and lock screen accessory widgets.
-- **[slopWidget.xcworkspace](slopWidget.xcworkspace/contents.xcworkspacedata)** & **[slopWidget.xcodeproj](slopWidget.xcodeproj/project.pbxproj)**: Xcode workspace and project for macOS development.
+- **[Tests/slopWidgetTests/](Tests/slopWidgetTests/)**: Unit test suite:
+  - [`AuthManagerTests.swift`](Tests/slopWidgetTests/AuthManagerTests.swift): Tests credential initialization, login, logout, whitespace sanitization, and JSON serialization.
+  - [`ProviderUsageTests.swift`](Tests/slopWidgetTests/ProviderUsageTests.swift): Tests quota math, percentage rounding, and overflow clamping.
+- **[.github/workflows/test.yml](.github/workflows/test.yml)**: CI test automation workflow compatible with GitHub Actions and local `act` runs.
+
+---
+
+## Testing
+
+### Run Tests Locally (isim)
+Run the full iOS XCTest suite on Linux with zero container overhead:
+```bash
+isim test -package-path . -scheme slopWidget
+```
+
+### Run Tests via `act` / GitHub Actions
+Execute the CI workflow locally from the command line using `act`:
+```bash
+# Verify available jobs in act
+act -l
+
+# Run the test workflow locally
+act
+```
+*(Note: requires your user to be added to the Docker group: `sudo usermod -aG docker $USER && newgrp docker`).*
 
 ---
 

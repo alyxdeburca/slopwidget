@@ -31,5 +31,10 @@ let package = Package(
             name: "slopWidgetExtension",
             path: "slopWidgetExtension"
         ),
+        .testTarget(
+            name: "slopWidgetTests",
+            dependencies: ["slopWidget"],
+            path: "Tests/slopWidgetTests"
+        ),
     ]
 )
