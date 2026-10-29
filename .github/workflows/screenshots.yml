@@ -1,0 +1,64 @@
+name: Regenerate Screenshots
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  screenshots:
+    name: Capture widget & app previews
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm libcurl4-openssl-dev
+
+      - name: Install isim
+        run: |
+          curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/kolabs-dev/isim/main/install.sh | bash -s -- --no-desktop
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+          isim toolchain install
+
+      - name: Build app (simulator)
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          xtool dev generate-xcode-project
+          isim build -workspace xtool/slopWidget.xcworkspace -scheme slopWidget-App -o build
+
+      - name: Capture previews
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          APP=build/slopWidget-App.app
+          OUT=assets/screenshots
+          declare -A MAP=(
+            [MainDashboard]=main_dashboard.png
+            [LoginSheet]=login_sheet.png
+            [Widget1x1]=widget_1x1.png
+            [Widget1x2]=widget_1x2.png
+            [Widget1x3]=widget_1x3.png
+            [Widget2x2]=widget_2x2.png
+          )
+          for name in "${!MAP[@]}"; do
+            isim preview "$APP" "$name" -o "$OUT/${MAP[$name]}"
+          done
+
+      - name: Commit updated screenshots
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- assets/screenshots; then
+            echo "No screenshot changes."
+            exit 0
+          fi
+          git add assets/screenshots
+          git commit -m "chore: regenerate screenshots"
+          git push
