@@ -35,7 +35,7 @@ final class T3SecretsLoginTests: XCTestCase {
                 agKey = trimmed
             }
         }
-        let agId = "adam@alyx.site"
+        let agId = "example@example.com"
 
         // 2. Codex secret discovery
         var codexKey = "sk-proj-codex-t3"

@@ -300,7 +300,7 @@ public class AuthManager: ObservableObject {
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
-            identifier: "adam@alyx.site",
+            identifier: "example@example.com",
             isLoggedIn: true,
             lastVerified: Date()
         )
