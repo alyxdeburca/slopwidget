@@ -770,6 +770,23 @@ public class AuthManager: ObservableObject {
         }
     }
 
+    /// Cycles the OpenCode window when the widget opens the app via its
+    /// `slopwidget://cycle` URL.
+    public func cycleOpenCodeMeter() {
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        let order = ["rolling", "weekly", "monthly"]
+        let current = snapshot.openCodeMeterSelection ?? "weekly"
+        let index = order.firstIndex(of: current) ?? 1
+        let next = order[(index + 1) % order.count]
+        snapshot.openCodeMeterSelection = next
+        UserDefaults.standard.set(next, forKey: "opencodeMeterSelection")
+        try? SharedUsageStore.save(snapshot)
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        #endif
+    }
+
     /// Fetch the OpenCode Go allowance and publish it to the widget.
     @discardableResult
     public func refreshOpenCodeUsage() async -> Bool {

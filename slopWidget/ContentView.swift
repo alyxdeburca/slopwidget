@@ -581,6 +581,11 @@ public struct ContentView: View {
             .sheet(isPresented: $showingLoginSheet) {
                 LoginSheetView()
             }
+            .onOpenURL { url in
+                if url.scheme == "slopwidget", url.host == "cycle" {
+                    authManager.cycleOpenCodeMeter()
+                }
+            }
             .onAppear {
                 if providers.isEmpty {
                     providers = SampleUsageData.providers
