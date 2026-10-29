@@ -593,6 +593,10 @@ public struct ContentView: View {
                 guard let usage else { return }
                 replaceCodexProvider(with: usage.providerUsageItem)
             }
+            .onChange(of: authManager.openCodeUsage) { _, usage in
+                guard let usage else { return }
+                replaceOpenCodeProvider(with: usage)
+            }
         }
     }
 
@@ -602,8 +606,12 @@ public struct ContentView: View {
         isRefreshingWidget = true
         defer { isRefreshingWidget = false }
         await authManager.refreshChatGPTUsage()
+        await authManager.refreshOpenCodeUsage()
         if let usage = authManager.chatGPTUsage {
             replaceCodexProvider(with: usage.providerUsageItem)
+        }
+        if let usage = authManager.openCodeUsage {
+            replaceOpenCodeProvider(with: usage)
         }
         #if canImport(WidgetKit)
         WidgetCenter.shared.reloadAllTimelines()
@@ -614,17 +622,45 @@ public struct ContentView: View {
 
     @MainActor
     private func refreshUsage() async {
-        guard authManager.codexAuthMethod == .chatGPT else { return }
         isRefreshingUsage = true
         defer { isRefreshingUsage = false }
-        await authManager.refreshChatGPTUsage()
-        if let usage = authManager.chatGPTUsage {
-            replaceCodexProvider(with: usage.providerUsageItem)
+        if authManager.codexAuthMethod == .chatGPT {
+            await authManager.refreshChatGPTUsage()
+            if let usage = authManager.chatGPTUsage {
+                replaceCodexProvider(with: usage.providerUsageItem)
+            }
+        }
+        if authManager.openCodeAuthMethod == .oauth {
+            await authManager.refreshOpenCodeUsage()
+            if let usage = authManager.openCodeUsage {
+                replaceOpenCodeProvider(with: usage)
+            }
         }
     }
 
     private func replaceCodexProvider(with item: ProviderUsageItem) {
         if let index = providers.firstIndex(where: { $0.id == "codex" }) {
+            providers[index] = item
+        } else {
+            providers.append(item)
+        }
+    }
+
+    private func replaceOpenCodeProvider(with usage: OpenCodeUsage) {
+        let item = ProviderUsageItem(
+            id: "opencode-go",
+            name: "OpenCode Go",
+            shortName: "OCG",
+            icon: "bolt.fill",
+            color: Color(red: 0.25, green: 0.65, blue: 0.98),
+            requestsUsed: usage.displayPercent,
+            requestLimit: 100,
+            tokensUsed: usage.detail,
+            status: usage.statusText,
+            hasRequestCount: false,
+            hasUsageData: true
+        )
+        if let index = providers.firstIndex(where: { $0.id == "opencode-go" }) {
             providers[index] = item
         } else {
             providers.append(item)

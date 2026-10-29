@@ -18,14 +18,17 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         public var updatedAt: Date
         /// nil/false means the provider reports a percentage but no request total.
         public var hasRequestCount: Bool?
+        /// False until the provider has supplied any live usage at all.
+        public var hasUsageData: Bool?
 
-        public init(id: String, usedPercent: Double, detail: String, status: String, updatedAt: Date = Date(), hasRequestCount: Bool? = nil) {
+        public init(id: String, usedPercent: Double, detail: String, status: String, updatedAt: Date = Date(), hasRequestCount: Bool? = nil, hasUsageData: Bool? = nil) {
             self.id = id
             self.usedPercent = usedPercent
             self.detail = detail
             self.status = status
             self.updatedAt = updatedAt
             self.hasRequestCount = hasRequestCount
+            self.hasUsageData = hasUsageData
         }
     }
 

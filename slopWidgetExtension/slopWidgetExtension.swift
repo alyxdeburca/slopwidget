@@ -112,7 +112,8 @@ struct UsageWidgetProvider: TimelineProvider {
                 requestLimit: 100,
                 tokensUsed: record.detail,
                 status: record.status,
-                hasRequestCount: record.hasRequestCount ?? true
+                hasRequestCount: record.hasRequestCount ?? true,
+                hasUsageData: record.hasUsageData ?? true
             )
         }
     }

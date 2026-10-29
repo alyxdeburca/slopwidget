@@ -252,6 +252,9 @@ public class AuthManager: ObservableObject {
     @Published public private(set) var openCodeAuthState: OpenCodeAuthState = .signedOut
     /// Distinguishes the OpenCode device grant from a manually pasted token.
     @Published public private(set) var openCodeAuthMethod: OpenCodeAuthMethod = .apiKey
+    /// Latest OpenCode Go allowance.
+    @Published public private(set) var openCodeUsage: OpenCodeUsage?
+    @Published public private(set) var openCodeUsageError: String?
 
     private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
@@ -271,6 +274,7 @@ public class AuthManager: ObservableObject {
     private var antigravityTokens: AntigravityTokens?
     private let openCodeCredentialStore: any OpenCodeCredentialStoring
     private let openCodeOAuthNetworking: any OpenCodeOAuthNetworking
+    private let openCodeUsageService: any OpenCodeUsageFetching
     private var openCodeTokens: OpenCodeTokens?
 
     public init(
@@ -281,7 +285,8 @@ public class AuthManager: ObservableObject {
         antigravityCredentialStore: any AntigravityCredentialStoring = KeychainAntigravityCredentialStore.shared,
         antigravityOAuthNetworking: any AntigravityOAuthNetworking = URLSessionAntigravityOAuthNetworking(),
         openCodeCredentialStore: any OpenCodeCredentialStoring = KeychainOpenCodeCredentialStore.shared,
-        openCodeOAuthNetworking: any OpenCodeOAuthNetworking = URLSessionOpenCodeOAuthNetworking()
+        openCodeOAuthNetworking: any OpenCodeOAuthNetworking = URLSessionOpenCodeOAuthNetworking(),
+        openCodeUsageService: any OpenCodeUsageFetching = URLSessionOpenCodeUsageFetcher()
     ) {
         self.defaults = storage
         self.chatGPTCredentialStore = chatGPTCredentialStore
@@ -291,6 +296,7 @@ public class AuthManager: ObservableObject {
         self.antigravityOAuthNetworking = antigravityOAuthNetworking
         self.openCodeCredentialStore = openCodeCredentialStore
         self.openCodeOAuthNetworking = openCodeOAuthNetworking
+        self.openCodeUsageService = openCodeUsageService
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
@@ -760,6 +766,37 @@ public class AuthManager: ObservableObject {
             return false
         } catch {
             openCodeAuthState = .failed("Sign-in failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Fetch the OpenCode Go allowance and publish it to the widget.
+    @discardableResult
+    public func refreshOpenCodeUsage() async -> Bool {
+        do {
+            let tokens = try await refreshOpenCodeTokensIfNeeded()
+            let usage = try await openCodeUsageService.fetchUsage(tokens: tokens)
+            openCodeUsage = usage
+            openCodeUsageError = nil
+
+            var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+            snapshot.records["opencode-go"] = UsageSnapshot.Record(
+                id: "opencode-go",
+                usedPercent: Double(usage.displayPercent),
+                detail: usage.detail,
+                status: usage.statusText,
+                hasRequestCount: false,
+                hasUsageData: true
+            )
+            snapshot.updatedAt = Date()
+            try? SharedUsageStore.save(snapshot)
+            #if canImport(WidgetKit)
+            WidgetCenter.shared.reloadAllTimelines()
+            WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+            #endif
+            return true
+        } catch {
+            openCodeUsageError = error.localizedDescription
             return false
         }
     }
