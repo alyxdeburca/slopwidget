@@ -29,7 +29,15 @@ let package = Package(
         ),
         .target(
             name: "slopWidgetExtension",
-            path: "slopWidgetExtension"
+            path: "slopWidgetExtension",
+            linkerSettings: [
+                // SwiftPM links the extension code as a static archive. Because
+                // xtool sets the executable entry point to _NSExtensionMain, none
+                // of the archive members are referenced and the whole widget ends
+                // up dead-stripped (an empty binary with no __text section, which
+                // also makes the code-signing step fail). Force every member in.
+                .unsafeFlags(["-Xlinker", "-all_load"], .when(platforms: [.iOS]))
+            ]
         ),
         .testTarget(
             name: "slopWidgetTests",
