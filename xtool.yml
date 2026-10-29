@@ -1,0 +1,6 @@
+version: 1
+bundleID: com.example.slopWidget
+product: slopWidget
+extensions:
+  - product: slopWidgetExtension
+    infoPath: slopWidgetExtension-Info.plist
