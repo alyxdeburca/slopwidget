@@ -1,6 +1,7 @@
 import WidgetKit
 import SwiftUI
 import Foundation
+import AppIntents
 
 // MARK: - Usage Model
 
@@ -103,6 +104,22 @@ struct UsageWidgetProvider: TimelineProvider {
         }
         return UsageData.defaultProviders.map { base in
             guard let record = snapshot.records[base.id] else { return base }
+            if base.id == "opencode-go", let meters = snapshot.openCodeMeters {
+                let selection = snapshot.openCodeMeterSelection ?? "weekly"
+                let percent = meters.percent(for: selection) ?? record.usedPercent
+                return ProviderUsage(
+                    id: base.id,
+                    name: base.name,
+                    icon: base.icon,
+                    color: base.color,
+                    requestsUsed: min(100, max(0, Int(percent.rounded()))),
+                    requestLimit: 100,
+                    tokensUsed: selection.capitalized,
+                    status: record.status,
+                    hasRequestCount: false,
+                    hasUsageData: true
+                )
+            }
             return ProviderUsage(
                 id: base.id,
                 name: base.name,
@@ -269,6 +286,25 @@ struct UsageWidgetEntryView: View {
     }
 }
 
+// MARK: - Interactive intent
+
+/// Tapping the widget cycles the OpenCode Go window.
+struct CycleOpenCodeMeterIntent: AppIntent {
+    static let title: LocalizedStringResource = "Cycle OpenCode Usage Window"
+
+    func perform() async throws -> some IntentResult {
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        let order = ["rolling", "weekly", "monthly"]
+        let current = snapshot.openCodeMeterSelection ?? "weekly"
+        let index = order.firstIndex(of: current) ?? 1
+        snapshot.openCodeMeterSelection = order[(index + 1) % order.count]
+        try? SharedUsageStore.save(snapshot)
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        return .result()
+    }
+}
+
 // MARK: - Widget Declaration
 
 @main
@@ -284,8 +320,11 @@ struct slopWidget: @preconcurrency Widget {
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: UsageWidgetProvider()) { entry in
-            UsageWidgetEntryView(entry: entry)
-                .containerBackground(.background, for: .widget)
+            Button(intent: CycleOpenCodeMeterIntent()) {
+                UsageWidgetEntryView(entry: entry)
+            }
+            .buttonStyle(.plain)
+            .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName("AI Usage Stats")
         .description("Track requests and token usage for Antigravity, Codex, and OpenCode Go.")

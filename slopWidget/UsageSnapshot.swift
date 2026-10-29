@@ -10,6 +10,26 @@ import Security
 /// App Group is unavailable, so the snapshot travels through a Keychain item
 /// with a team-scoped access group (the free profile grants `<TEAM>.*`).
 public struct UsageSnapshot: Codable, Sendable, Equatable {
+    public struct OpenCodeMeters: Codable, Sendable, Equatable {
+        public var rolling: Double
+        public var weekly: Double
+        public var monthly: Double
+
+        public init(rolling: Double, weekly: Double, monthly: Double) {
+            self.rolling = rolling
+            self.weekly = weekly
+            self.monthly = monthly
+        }
+
+        public func percent(for window: String) -> Double? {
+            switch window {
+            case "rolling": return rolling
+            case "monthly": return monthly
+            default: return weekly
+            }
+        }
+    }
+
     public struct Record: Codable, Sendable, Equatable {
         public var id: String
         public var usedPercent: Double
@@ -34,10 +54,21 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
 
     public var records: [String: Record]
     public var updatedAt: Date
+    /// All three OpenCode Go windows, retained so the widget can cycle them.
+    public var openCodeMeters: OpenCodeMeters?
+    /// "rolling", "weekly", or "monthly".
+    public var openCodeMeterSelection: String?
 
-    public init(records: [String: Record] = [:], updatedAt: Date = Date()) {
+    public init(
+        records: [String: Record] = [:],
+        updatedAt: Date = Date(),
+        openCodeMeters: OpenCodeMeters? = nil,
+        openCodeMeterSelection: String? = nil
+    ) {
         self.records = records
         self.updatedAt = updatedAt
+        self.openCodeMeters = openCodeMeters
+        self.openCodeMeterSelection = openCodeMeterSelection
     }
 }
 

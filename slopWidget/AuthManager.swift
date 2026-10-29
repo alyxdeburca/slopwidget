@@ -780,10 +780,18 @@ public class AuthManager: ObservableObject {
             openCodeUsageError = nil
 
             var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+            let meters = UsageSnapshot.OpenCodeMeters(
+                rolling: usage.usage.rolling?.percent ?? 0,
+                weekly: usage.usage.weekly?.percent ?? 0,
+                monthly: usage.usage.monthly?.percent ?? 0
+            )
+            snapshot.openCodeMeters = meters
+            let selection = snapshot.openCodeMeterSelection ?? "weekly"
+            snapshot.openCodeMeterSelection = selection
             snapshot.records["opencode-go"] = UsageSnapshot.Record(
                 id: "opencode-go",
-                usedPercent: Double(usage.displayPercent),
-                detail: usage.detail,
+                usedPercent: meters.percent(for: selection) ?? Double(usage.displayPercent),
+                detail: selection.capitalized,
                 status: usage.statusText,
                 hasRequestCount: false,
                 hasUsageData: true
