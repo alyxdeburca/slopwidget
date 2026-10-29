@@ -25,6 +25,16 @@ let package = Package(
             exclude: [
                 "Assets.xcassets",
                 "Preview Content",
+            ],
+            linkerSettings: [
+                // Force the widget's AppIntent type metadata to stay in the
+                // binary; nothing in the app references it, so dead_strip
+                // would otherwise remove it and the runtime could not resolve
+                // the widget tap by type name.
+                .unsafeFlags([
+                    "-Xlinker", "-u",
+                    "-Xlinker", "_$s10slopWidget24CycleOpenCodeMeterIntentVMn",
+                ], .when(platforms: [.iOS]))
             ]
         ),
         .target(

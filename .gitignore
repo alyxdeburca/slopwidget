@@ -9,4 +9,7 @@ xcuserdata/
 DerivedData/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
+*.xcodeproj
+*.xcworkspace
+.bsp/
 .DS_Store
