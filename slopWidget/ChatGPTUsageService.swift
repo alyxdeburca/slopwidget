@@ -114,7 +114,8 @@ public struct ChatGPTUsage: Codable, Sendable, Equatable {
             requestsUsed: usedPercent,
             requestLimit: 100,
             tokensUsed: planLabel,
-            status: statusText
+            status: statusText,
+            hasRequestCount: false
         )
     }
 }

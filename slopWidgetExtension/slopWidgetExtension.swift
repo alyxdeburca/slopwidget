@@ -13,6 +13,7 @@ struct ProviderUsage: Identifiable {
     var requestLimit: Int
     var tokensUsed: String
     var status: String
+    var hasRequestCount: Bool = true
 
     var percentage: Double {
         guard requestLimit > 0 else { return 0 }
@@ -103,7 +104,8 @@ struct UsageWidgetProvider: TimelineProvider {
                 requestsUsed: min(100, max(0, Int(record.usedPercent.rounded()))),
                 requestLimit: 100,
                 tokensUsed: record.detail,
-                status: record.status
+                status: record.status,
+                hasRequestCount: record.hasRequestCount ?? true
             )
         }
     }
@@ -213,9 +215,11 @@ struct UsageWidgetEntryView: View {
                             .scaleEffect(x: 1, y: 0.7, anchor: .center)
 
                         HStack {
-                            Text("\(provider.requestsUsed)/\(provider.requestLimit)")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
+                            if provider.hasRequestCount {
+                                Text("\(provider.requestsUsed)/\(provider.requestLimit)")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text(provider.tokensUsed)
                                 .font(.system(size: 9, weight: .semibold))

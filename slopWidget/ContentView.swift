@@ -15,8 +15,10 @@ public struct ProviderUsageItem: Identifiable, Sendable {
     public var requestLimit: Int
     public var tokensUsed: String
     public var status: String
+    /// False when the provider reports percentages but not request totals.
+    public var hasRequestCount: Bool
 
-    public init(id: String, name: String, shortName: String, icon: String, color: Color, requestsUsed: Int, requestLimit: Int, tokensUsed: String, status: String) {
+    public init(id: String, name: String, shortName: String, icon: String, color: Color, requestsUsed: Int, requestLimit: Int, tokensUsed: String, status: String, hasRequestCount: Bool = true) {
         self.id = id
         self.name = name
         self.shortName = shortName
@@ -26,6 +28,7 @@ public struct ProviderUsageItem: Identifiable, Sendable {
         self.requestLimit = requestLimit
         self.tokensUsed = tokensUsed
         self.status = status
+        self.hasRequestCount = hasRequestCount
     }
 
     public var percentage: Double {
@@ -201,9 +204,11 @@ public struct Widget1x2View: View {
                             .scaleEffect(x: 1, y: 0.7, anchor: .center)
 
                         HStack {
-                            Text("\(item.requestsUsed)/\(item.requestLimit)")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
+                            if item.hasRequestCount {
+                                Text("\(item.requestsUsed)/\(item.requestLimit)")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text(item.tokensUsed)
                                 .font(.system(size: 9, weight: .semibold))
@@ -274,9 +279,11 @@ public struct Widget1x3View: View {
                             .tint(item.color)
                             .scaleEffect(x: 1, y: 0.65, anchor: .center)
 
-                        Text("\(item.requestsUsed)/\(item.requestLimit) reqs")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
+                        if item.hasRequestCount {
+                            Text("\(item.requestsUsed)/\(item.requestLimit) reqs")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(8)
                     .frame(maxWidth: .infinity)
@@ -365,9 +372,11 @@ public struct Widget2x2View: View {
                             .scaleEffect(x: 1, y: 0.8, anchor: .center)
 
                         HStack {
-                            Text("Requests: \(item.requestsUsed) of \(item.requestLimit)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            if item.hasRequestCount {
+                                Text("Requests: \(item.requestsUsed) of \(item.requestLimit)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text("Tokens: \(item.tokensUsed)")
                                 .font(.caption2.bold())
@@ -525,7 +534,9 @@ public struct ContentView: View {
                                     Text(providers[idx].name)
                                         .font(.subheadline.bold())
                                     Spacer()
-                                    Text("\(providers[idx].requestsUsed) / \(providers[idx].requestLimit) reqs (\(providers[idx].percentageInt)%)")
+                                    Text(providers[idx].hasRequestCount
+                                         ? "\(providers[idx].requestsUsed) / \(providers[idx].requestLimit) reqs (\(providers[idx].percentageInt)%)"
+                                         : "\(providers[idx].percentageInt)% used")
                                         .font(.caption.bold())
                                         .foregroundColor(providers[idx].color)
                                 }
@@ -586,6 +597,7 @@ public struct ContentView: View {
         }
         #if canImport(WidgetKit)
         WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
         #endif
         widgetRefreshStatus = "Widget refreshed at \(Date().formatted(date: .omitted, time: .shortened))."
     }

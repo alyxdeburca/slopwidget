@@ -293,12 +293,14 @@ public class AuthManager: ObservableObject {
                 id: "codex",
                 usedPercent: Double(usage.usedPercent),
                 detail: usage.planLabel,
-                status: usage.statusText
+                status: usage.statusText,
+                hasRequestCount: false
             )
             snapshot.updatedAt = Date()
             try? SharedUsageStore.save(snapshot)
             #if canImport(WidgetKit)
             WidgetCenter.shared.reloadAllTimelines()
+            WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
             #endif
             return true
         } catch {

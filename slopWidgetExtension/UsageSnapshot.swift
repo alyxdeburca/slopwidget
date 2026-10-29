@@ -16,13 +16,16 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         public var detail: String
         public var status: String
         public var updatedAt: Date
+        /// nil/false means the provider reports a percentage but no request total.
+        public var hasRequestCount: Bool?
 
-        public init(id: String, usedPercent: Double, detail: String, status: String, updatedAt: Date = Date()) {
+        public init(id: String, usedPercent: Double, detail: String, status: String, updatedAt: Date = Date(), hasRequestCount: Bool? = nil) {
             self.id = id
             self.usedPercent = usedPercent
             self.detail = detail
             self.status = status
             self.updatedAt = updatedAt
+            self.hasRequestCount = hasRequestCount
         }
     }
 
@@ -43,11 +46,10 @@ public enum SharedUsageStore {
     /// The free provisioning profile grants keychain access group `<TEAM>.*`.
     /// The app bundle ID is `XTL-<TEAM>.<bundle>` in xtool-signed builds.
     public static var accessGroup: String? {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return nil }
-        guard bundleID.hasPrefix("XTL-") else { return nil }
-        let remainder = bundleID.dropFirst(4)
-        guard let team = remainder.split(separator: ".").first, !team.isEmpty else { return nil }
-        return "\(team).slopWidget.usage"
+        // Both targets share this explicit team-scoped group. Deriving it from
+        // Bundle.main.bundleIdentifier is unreliable because the extension can
+        // report a different (unprefixed) CFBundleIdentifier at runtime.
+        "L25T52S232.slopWidget.usage"
     }
 
     public static func save(_ snapshot: UsageSnapshot) throws {
