@@ -15,11 +15,13 @@ public struct ProviderUsageItem: Identifiable, Sendable {
     public var requestLimit: Int
     public var tokensUsed: String
     public var status: String
+    /// Optional "resets in …" / "resets at …" text for providers that report it.
+    public var resetText: String?
     /// False when the provider reports percentages but not request totals.
     public var hasRequestCount: Bool
     public var hasUsageData: Bool
 
-    public init(id: String, name: String, shortName: String, icon: String, color: Color, requestsUsed: Int, requestLimit: Int, tokensUsed: String, status: String, hasRequestCount: Bool = true, hasUsageData: Bool = true) {
+    public init(id: String, name: String, shortName: String, icon: String, color: Color, requestsUsed: Int, requestLimit: Int, tokensUsed: String, status: String, resetText: String? = nil, hasRequestCount: Bool = true, hasUsageData: Bool = true) {
         self.id = id
         self.name = name
         self.shortName = shortName
@@ -29,6 +31,7 @@ public struct ProviderUsageItem: Identifiable, Sendable {
         self.requestLimit = requestLimit
         self.tokensUsed = tokensUsed
         self.status = status
+        self.resetText = resetText
         self.hasRequestCount = hasRequestCount
         self.hasUsageData = hasUsageData
     }
@@ -234,6 +237,12 @@ public struct Widget1x2View: View {
                             Text(item.tokensUsed)
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(.secondary)
+                        }
+                        if let reset = item.resetText {
+                            Text(reset)
+                                .font(.system(size: 8))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
                     .padding(10)

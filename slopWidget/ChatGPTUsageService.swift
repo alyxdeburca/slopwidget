@@ -104,6 +104,16 @@ public struct ChatGPTUsage: Codable, Sendable, Equatable {
         return planType.uppercased()
     }
 
+    /// Human-readable reset time for the displayed window, if available.
+    public var resetText: String? {
+        guard let resetAt = displayWindow?.resetAt else { return nil }
+        let date = Date(timeIntervalSince1970: TimeInterval(resetAt))
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return "Resets \(formatter.string(from: date))"
+    }
+
     public var providerUsageItem: ProviderUsageItem {
         ProviderUsageItem(
             id: "codex",
@@ -115,6 +125,7 @@ public struct ChatGPTUsage: Codable, Sendable, Equatable {
             requestLimit: 100,
             tokensUsed: planLabel,
             status: statusText,
+            resetText: resetText,
             hasRequestCount: false
         )
     }

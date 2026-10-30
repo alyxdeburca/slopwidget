@@ -15,6 +15,7 @@ struct ProviderUsage: Identifiable {
     var requestLimit: Int
     var tokensUsed: String
     var status: String
+    var resetText: String? = nil
     var hasRequestCount: Bool = true
     var hasUsageData: Bool = true
 
@@ -148,6 +149,7 @@ struct UsageWidgetProvider: TimelineProvider {
                     requestLimit: 100,
                     tokensUsed: selection.capitalized,
                     status: record.status,
+                    resetText: record.resetText,
                     hasRequestCount: false,
                     hasUsageData: true
                 )
@@ -168,6 +170,7 @@ struct UsageWidgetProvider: TimelineProvider {
                         requestLimit: 100,
                         tokensUsed: UsageSnapshot.ClaudeMeters.label(for: window),
                         status: record.status,
+                        resetText: meters.resetText(for: window) ?? record.resetText,
                         hasRequestCount: false,
                         hasUsageData: true
                     )
@@ -183,6 +186,7 @@ struct UsageWidgetProvider: TimelineProvider {
                 requestLimit: 100,
                 tokensUsed: record.detail,
                 status: record.status,
+                resetText: record.resetText,
                 hasRequestCount: record.hasRequestCount ?? true,
                 hasUsageData: record.hasUsageData ?? true
             )
@@ -357,6 +361,12 @@ struct UsageWidgetEntryView: View {
                             Text(provider.tokensUsed)
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(.secondary)
+                        }
+                        if let reset = provider.resetText {
+                            Text(reset)
+                                .font(.system(size: 8))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
                     .padding(8)

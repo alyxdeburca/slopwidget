@@ -315,6 +315,8 @@ public class AuthManager: ObservableObject {
     /// Latest Claude subscription usage.
     @Published public private(set) var claudeUsage: ClaudeUsage?
     @Published public private(set) var claudeUsageError: String?
+    @Published public private(set) var antigravityUsage: AntigravityUsage?
+    @Published public private(set) var antigravityUsageError: String?
     /// Drives the "Sign in with Claude" button/status in `LoginSheetView`.
     @Published public private(set) var claudeAuthState: ClaudeAuthState = .signedOut
     /// Distinguishes the OAuth session from a manually pasted token.
@@ -341,6 +343,7 @@ public class AuthManager: ObservableObject {
 
     private let antigravityCredentialStore: any AntigravityCredentialStoring
     private let antigravityOAuthNetworking: any AntigravityOAuthNetworking
+    private let antigravityUsageService: any AntigravityUsageFetching
     private var antigravityTokens: AntigravityTokens?
     private let openCodeCredentialStore: any OpenCodeCredentialStoring
     private let openCodeOAuthNetworking: any OpenCodeOAuthNetworking
@@ -364,6 +367,7 @@ public class AuthManager: ObservableObject {
         chatGPTUsageService: any ChatGPTUsageFetching = URLSessionChatGPTUsageFetcher(),
         antigravityCredentialStore: any AntigravityCredentialStoring = KeychainAntigravityCredentialStore.shared,
         antigravityOAuthNetworking: any AntigravityOAuthNetworking = URLSessionAntigravityOAuthNetworking(),
+        antigravityUsageService: any AntigravityUsageFetching = URLSessionAntigravityUsageFetcher(),
         openCodeCredentialStore: any OpenCodeCredentialStoring = KeychainOpenCodeCredentialStore.shared,
         openCodeOAuthNetworking: any OpenCodeOAuthNetworking = URLSessionOpenCodeOAuthNetworking(),
         openCodeUsageService: any OpenCodeUsageFetching = URLSessionOpenCodeUsageFetcher(),
@@ -377,6 +381,7 @@ public class AuthManager: ObservableObject {
         self.chatGPTUsageService = chatGPTUsageService
         self.antigravityCredentialStore = antigravityCredentialStore
         self.antigravityOAuthNetworking = antigravityOAuthNetworking
+        self.antigravityUsageService = antigravityUsageService
         self.openCodeCredentialStore = openCodeCredentialStore
         self.openCodeOAuthNetworking = openCodeOAuthNetworking
         self.openCodeUsageService = openCodeUsageService
@@ -624,15 +629,19 @@ public class AuthManager: ObservableObject {
         var snapshot = snapshot
         let meters = UsageSnapshot.ClaudeMeters(
             fiveHour: usage.fiveHour?.utilization,
-            sevenDay: usage.sevenDay?.utilization
+            sevenDay: usage.sevenDay?.utilization,
+            fiveHourReset: usage.resetText(for: "fiveHour"),
+            sevenDayReset: usage.resetText(for: "sevenDay")
         )
         snapshot.claudeMeters = meters
         var usedPercent = Double(usage.usedPercent)
         var detail = usage.detail
+        var resetText = usage.resetText
         if let window = meters.displayedWindow(selection: snapshot.claudeMeterSelection),
            let percent = meters.percent(for: window) {
             usedPercent = Double(min(100, max(0, Int(percent.rounded()))))
             detail = UsageSnapshot.ClaudeMeters.label(for: window)
+            resetText = meters.resetText(for: window)
         }
         snapshot.records["claude"] = UsageSnapshot.Record(
             id: "claude",
@@ -640,7 +649,8 @@ public class AuthManager: ObservableObject {
             detail: detail,
             status: usage.statusText,
             hasRequestCount: false,
-            hasUsageData: usage.hasUsageData
+            hasUsageData: usage.hasUsageData,
+            resetText: resetText
         )
         snapshot.updatedAt = Date()
         return snapshot
@@ -662,6 +672,48 @@ public class AuthManager: ObservableObject {
             throw ClaudeUsageError.missingToken
         }
         return try await claudeUsageService.fetchUsage(accessToken: claudeCreds.apiKey)
+    }
+
+    /// Fetch Antigravity usage with the saved Google access token and publish
+    /// it to the widget. Best-effort: the Cloud Code quota endpoint requires
+    /// an eligible Antigravity license and may return 403.
+    @discardableResult
+    public func refreshAntigravityUsage() async -> Bool {
+        do {
+            let usage = try await fetchAntigravityUsage()
+            antigravityUsage = usage
+            antigravityUsageError = nil
+
+            var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+            snapshot.records["antigravity"] = UsageSnapshot.Record(
+                id: "antigravity",
+                usedPercent: Double(usage.usedPercent),
+                detail: usage.detail,
+                status: usage.statusText,
+                hasRequestCount: false,
+                hasUsageData: usage.hasUsageData,
+                resetText: usage.resetText
+            )
+            snapshot.updatedAt = Date()
+            try? SharedUsageStore.save(snapshot)
+            reloadWidgets()
+            return true
+        } catch {
+            antigravityUsageError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func fetchAntigravityUsage() async throws -> AntigravityUsage {
+        let token: String
+        if let tokens = antigravityTokens, !tokens.accessToken.isEmpty {
+            token = tokens.accessToken
+        } else if antigravityCreds.isLoggedIn, !antigravityCreds.apiKey.isEmpty {
+            token = antigravityCreds.apiKey
+        } else {
+            throw AntigravityUsageError.missingToken
+        }
+        return try await antigravityUsageService.fetchUsage(accessToken: token, projectID: nil)
     }
 
     // MARK: - Provider order
@@ -880,7 +932,8 @@ public class AuthManager: ObservableObject {
                 usedPercent: Double(usage.usedPercent),
                 detail: usage.planLabel,
                 status: usage.statusText,
-                hasRequestCount: false
+                hasRequestCount: false,
+                resetText: usage.resetText
             )
             snapshot.updatedAt = Date()
             try? SharedUsageStore.save(snapshot)

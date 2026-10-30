@@ -43,16 +43,28 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
 
         public var fiveHour: Double?
         public var sevenDay: Double?
+        public var fiveHourReset: String?
+        public var sevenDayReset: String?
 
-        public init(fiveHour: Double? = nil, sevenDay: Double? = nil) {
+        public init(fiveHour: Double? = nil, sevenDay: Double? = nil, fiveHourReset: String? = nil, sevenDayReset: String? = nil) {
             self.fiveHour = fiveHour
             self.sevenDay = sevenDay
+            self.fiveHourReset = fiveHourReset
+            self.sevenDayReset = sevenDayReset
         }
 
         public func percent(for window: String) -> Double? {
             switch window {
             case "fiveHour": return fiveHour
             case "sevenDay": return sevenDay
+            default: return nil
+            }
+        }
+
+        public func resetText(for window: String) -> String? {
+            switch window {
+            case "fiveHour": return fiveHourReset
+            case "sevenDay": return sevenDayReset
             default: return nil
             }
         }
@@ -102,8 +114,10 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         public var hasRequestCount: Bool?
         /// False until the provider has supplied any live usage at all.
         public var hasUsageData: Bool?
+        /// Optional "resets in/at …" text for providers that report it.
+        public var resetText: String?
 
-        public init(id: String, usedPercent: Double, detail: String, status: String, updatedAt: Date = Date(), hasRequestCount: Bool? = nil, hasUsageData: Bool? = nil) {
+        public init(id: String, usedPercent: Double, detail: String, status: String, updatedAt: Date = Date(), hasRequestCount: Bool? = nil, hasUsageData: Bool? = nil, resetText: String? = nil) {
             self.id = id
             self.usedPercent = usedPercent
             self.detail = detail
@@ -111,6 +125,7 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
             self.updatedAt = updatedAt
             self.hasRequestCount = hasRequestCount
             self.hasUsageData = hasUsageData
+            self.resetText = resetText
         }
     }
 

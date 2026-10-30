@@ -69,6 +69,46 @@ public struct ClaudeUsage: Decodable, Sendable, Equatable {
         return usedPercent >= 85 ? "High" : "Active"
     }
 
+    /// Human-readable reset time for a specific window label ("fiveHour"/"sevenDay").
+    public func resetText(for window: String) -> String? {
+        let raw: String?
+        switch window {
+        case "fiveHour": raw = fiveHour?.resetsAt
+        case "sevenDay": raw = sevenDay?.resetsAt
+        default: raw = nil
+        }
+        guard let raw else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var date = formatter.date(from: raw)
+        if date == nil {
+            formatter.formatOptions = [.withInternetDateTime]
+            date = formatter.date(from: raw)
+        }
+        guard let date else { return "Resets \(raw)" }
+        let out = DateFormatter()
+        out.dateStyle = .short
+        out.timeStyle = .short
+        return "Resets \(out.string(from: date))"
+    }
+
+    /// Human-readable reset time for the displayed (most constrained) window.
+    public var resetText: String? {
+        guard let raw = displayEntry?.window.resetsAt else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var date = formatter.date(from: raw)
+        if date == nil {
+            formatter.formatOptions = [.withInternetDateTime]
+            date = formatter.date(from: raw)
+        }
+        guard let date else { return "Resets \(raw)" }
+        let out = DateFormatter()
+        out.dateStyle = .short
+        out.timeStyle = .short
+        return "Resets \(out.string(from: date))"
+    }
+
     public var providerUsageItem: ProviderUsageItem {
         ProviderUsageItem(
             id: "claude",
@@ -80,6 +120,7 @@ public struct ClaudeUsage: Decodable, Sendable, Equatable {
             requestLimit: 100,
             tokensUsed: detail,
             status: statusText,
+            resetText: resetText,
             hasRequestCount: false,
             hasUsageData: hasUsageData
         )
