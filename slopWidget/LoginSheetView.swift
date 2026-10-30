@@ -281,6 +281,13 @@ public struct LoginSheetView: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        if selectedTab == .claude {
+                            Text("Paste a Claude Code OAuth access token with the user:profile scope. Usage comes from Anthropic's undocumented /api/oauth/usage endpoint, which may change. API keys (sk-ant-api…) are not accepted by it.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
                         // Input fields
                         VStack(alignment: .leading, spacing: 12) {
                             Text("API Key / Token")
@@ -590,6 +597,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "Antigravity Cloud & Gemini Agent Platform"
         case .codex: return "OpenAI Codex & API Workspaces"
         case .opencodeGo: return "OpenCode Developer Network & Cloud Endpoints"
+        case .claude: return "Claude subscription limits (5-hour and weekly)"
         }
     }
 
@@ -598,6 +606,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "Account Email (optional)"
         case .codex: return "Organization ID (optional)"
         case .opencodeGo: return "Server Endpoint URL (optional)"
+        case .claude: return "Account Label (optional)"
         }
     }
 
@@ -606,6 +615,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "user@example.com"
         case .codex: return "org-12345678"
         case .opencodeGo: return "https://api.opencode.dev"
+        case .claude: return "you@example.com"
         }
     }
 }

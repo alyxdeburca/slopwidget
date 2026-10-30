@@ -13,3 +13,4 @@ DerivedData/
 *.xcworkspace
 .bsp/
 .DS_Store
+.claude/

@@ -8,6 +8,7 @@ import AppIntents
 struct ProviderUsage: Identifiable {
     let id: String
     let name: String
+    let shortName: String
     let icon: String
     let color: Color
     var requestsUsed: Int
@@ -36,6 +37,7 @@ enum UsageData {
         ProviderUsage(
             id: "antigravity",
             name: "Antigravity",
+            shortName: "AG",
             icon: "sparkles",
             color: Color(red: 0.65, green: 0.40, blue: 0.98),
             requestsUsed: 0,
@@ -47,6 +49,7 @@ enum UsageData {
         ProviderUsage(
             id: "codex",
             name: "Codex",
+            shortName: "CDX",
             icon: "terminal.fill",
             color: Color(red: 0.20, green: 0.80, blue: 0.58),
             requestsUsed: 88,
@@ -57,12 +60,26 @@ enum UsageData {
         ProviderUsage(
             id: "opencode-go",
             name: "OpenCode Go",
+            shortName: "OCG",
             icon: "bolt.fill",
             color: Color(red: 0.25, green: 0.65, blue: 0.98),
             requestsUsed: 0,
             requestLimit: 50,
             tokensUsed: "—",
             status: "Not synced",
+            hasUsageData: false
+        ),
+        ProviderUsage(
+            id: "claude",
+            name: "Claude",
+            shortName: "CLD",
+            icon: "text.bubble.fill",
+            color: Color(red: 0.85, green: 0.47, blue: 0.34),
+            requestsUsed: 0,
+            requestLimit: 100,
+            tokensUsed: "—",
+            status: "Not synced",
+            hasRequestCount: false,
             hasUsageData: false
         )
     ]
@@ -114,7 +131,7 @@ struct UsageWidgetProvider: TimelineProvider {
         guard let snapshot = SharedUsageStore.load() else {
             return UsageData.defaultProviders
         }
-        return UsageData.defaultProviders.map { base in
+        let providers = UsageData.defaultProviders.map { base -> ProviderUsage in
             guard let record = snapshot.records[base.id] else { return base }
             if base.id == "opencode-go", let meters = snapshot.openCodeMeters {
                 let selection = UserDefaults.standard.string(forKey: "opencodeMeterSelection")
@@ -124,6 +141,7 @@ struct UsageWidgetProvider: TimelineProvider {
                 return ProviderUsage(
                     id: base.id,
                     name: base.name,
+                    shortName: base.shortName,
                     icon: base.icon,
                     color: base.color,
                     requestsUsed: min(100, max(0, Int(percent.rounded()))),
@@ -137,6 +155,7 @@ struct UsageWidgetProvider: TimelineProvider {
             return ProviderUsage(
                 id: base.id,
                 name: base.name,
+                shortName: base.shortName,
                 icon: base.icon,
                 color: base.color,
                 requestsUsed: min(100, max(0, Int(record.usedPercent.rounded()))),
@@ -147,6 +166,7 @@ struct UsageWidgetProvider: TimelineProvider {
                 hasUsageData: record.hasUsageData ?? true
             )
         }
+        return UsageSnapshot.ordered(providers, by: snapshot.providerOrder, id: \.id)
     }
 }
 
@@ -245,7 +265,7 @@ struct UsageWidgetEntryView: View {
             }
 
             HStack(spacing: 8) {
-                ForEach(entry.providers) { provider in
+                ForEach(entry.providers.prefix(3)) { provider in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 4) {
                             Image(systemName: provider.icon)
@@ -319,7 +339,8 @@ struct UsageWidgetEntryView: View {
                 Spacer()
                 Text(entry.averageText).font(.caption.bold())
             }
-            Text("AG: 42% \u{2022} Codex: 88% \u{2022} OC: 30%")
+            Text(entry.providers.map { "\($0.shortName) \($0.percentageText)" }.joined(separator: " \u{2022} "))
+                .lineLimit(2)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
         }
