@@ -11,6 +11,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
     case antigravity = "antigravity"
     case codex = "codex"
     case opencodeGo = "opencode-go"
+    case claude = "claude"
 
     public var id: String { rawValue }
 
@@ -19,6 +20,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
         case .antigravity: return "Antigravity"
         case .codex: return "Codex"
         case .opencodeGo: return "OpenCode Go"
+        case .claude: return "Claude"
         }
     }
 
@@ -27,6 +29,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
         case .antigravity: return "sparkles"
         case .codex: return "terminal.fill"
         case .opencodeGo: return "bolt.fill"
+        case .claude: return "text.bubble.fill"
         }
     }
 
@@ -35,6 +38,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
         case .antigravity: return Color(red: 0.65, green: 0.40, blue: 0.98)
         case .codex: return Color(red: 0.20, green: 0.80, blue: 0.58)
         case .opencodeGo: return Color(red: 0.25, green: 0.65, blue: 0.98)
+        case .claude: return Color(red: 0.85, green: 0.47, blue: 0.34)
         }
     }
 
@@ -43,6 +47,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
         case .antigravity: return "ag_live_..."
         case .codex: return "sk-proj-..."
         case .opencodeGo: return "ocg_pat_..."
+        case .claude: return "sk-ant-oat01-..."
         }
     }
 }
@@ -234,6 +239,7 @@ public class AuthManager: ObservableObject {
     @Published public var antigravityCreds: ServiceCredentials
     @Published public var codexCreds: ServiceCredentials
     @Published public var opencodeGoCreds: ServiceCredentials
+    @Published public var claudeCreds: ServiceCredentials
 
     /// Drives the ChatGPT sign-in button/status in `LoginSheetView`.
     @Published public private(set) var chatGPTAuthState: ChatGPTAuthState = .signedOut
@@ -256,10 +262,25 @@ public class AuthManager: ObservableObject {
     @Published public private(set) var openCodeUsage: OpenCodeUsage?
     @Published public private(set) var openCodeUsageError: String?
 
+    /// Latest Claude subscription usage.
+    @Published public private(set) var claudeUsage: ClaudeUsage?
+    @Published public private(set) var claudeUsageError: String?
+    /// Where the token behind the latest Claude refresh came from.
+    @Published public private(set) var claudeTokenSource: ClaudeTokenSource?
+    /// Set when sync was configured but failed and another token was used instead.
+    @Published public private(set) var claudeSyncWarning: String?
+    /// The desktop token-sync endpoint (the secret lives in the Keychain).
+    @Published public private(set) var claudeSyncURL: String
+
+    /// Provider IDs in the order widgets display them.
+    @Published public private(set) var providerOrder: [String]
+
     private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
     private let codexKey = "auth_creds_codex"
     private let opencodeKey = "auth_creds_opencode_go"
+    private let claudeKey = "auth_creds_claude"
+    private let providerOrderKey = "provider_order"
     private let codexMethodKey = "auth_method_codex"
     private let antigravityMethodKey = "auth_method_antigravity"
     private let openCodeMethodKey = "auth_method_opencode"
@@ -276,6 +297,15 @@ public class AuthManager: ObservableObject {
     private let openCodeOAuthNetworking: any OpenCodeOAuthNetworking
     private let openCodeUsageService: any OpenCodeUsageFetching
     private var openCodeTokens: OpenCodeTokens?
+    private let claudeUsageService: any ClaudeUsageFetching
+    private let claudeTokenSync: any ClaudeTokenSyncFetching
+    private let claudeSyncSecretStore: any ClaudeSyncSecretStoring
+    private let claudeSyncURLKey = "claude_sync_url"
+    private var claudeSyncSecret: String?
+    /// Last token fetched from the desktop. Memory only: never persisted.
+    private var claudeSyncedToken: ClaudeSyncedToken?
+
+    public static let defaultProviderOrder = ServiceProviderType.allCases.map(\.rawValue)
 
     public init(
         storage: UserDefaults = .standard,
@@ -286,7 +316,10 @@ public class AuthManager: ObservableObject {
         antigravityOAuthNetworking: any AntigravityOAuthNetworking = URLSessionAntigravityOAuthNetworking(),
         openCodeCredentialStore: any OpenCodeCredentialStoring = KeychainOpenCodeCredentialStore.shared,
         openCodeOAuthNetworking: any OpenCodeOAuthNetworking = URLSessionOpenCodeOAuthNetworking(),
-        openCodeUsageService: any OpenCodeUsageFetching = URLSessionOpenCodeUsageFetcher()
+        openCodeUsageService: any OpenCodeUsageFetching = URLSessionOpenCodeUsageFetcher(),
+        claudeUsageService: any ClaudeUsageFetching = URLSessionClaudeUsageFetcher(),
+        claudeTokenSync: any ClaudeTokenSyncFetching = URLSessionClaudeTokenSyncFetcher(),
+        claudeSyncSecretStore: any ClaudeSyncSecretStoring = KeychainClaudeSyncSecretStore.shared
     ) {
         self.defaults = storage
         self.chatGPTCredentialStore = chatGPTCredentialStore
@@ -297,6 +330,12 @@ public class AuthManager: ObservableObject {
         self.openCodeCredentialStore = openCodeCredentialStore
         self.openCodeOAuthNetworking = openCodeOAuthNetworking
         self.openCodeUsageService = openCodeUsageService
+        self.claudeUsageService = claudeUsageService
+        self.claudeTokenSync = claudeTokenSync
+        self.claudeSyncSecretStore = claudeSyncSecretStore
+        self.claudeSyncURL = storage.string(forKey: "claude_sync_url") ?? ""
+        self.claudeSyncSecret = (try? claudeSyncSecretStore.load()) ?? nil
+        self.providerOrder = AuthManager.normalizedOrder(storage.array(forKey: "provider_order") as? [String])
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
@@ -316,6 +355,9 @@ public class AuthManager: ObservableObject {
             isLoggedIn: true,
             lastVerified: Date()
         )
+
+        // Claude has no demo placeholder: it starts disconnected.
+        self.claudeCreds = AuthManager.load(from: storage, key: claudeKey) ?? ServiceCredentials()
 
         // OAuth tokens live only in secure storage. Never let a stale keychain
         // item override an explicitly saved manual API-key login.
@@ -383,6 +425,9 @@ public class AuthManager: ObservableObject {
         storage.removeObject(forKey: "auth_creds_antigravity")
         storage.removeObject(forKey: "auth_creds_codex")
         storage.removeObject(forKey: "auth_creds_opencode_go")
+        storage.removeObject(forKey: "auth_creds_claude")
+        storage.removeObject(forKey: "claude_sync_url")
+        storage.removeObject(forKey: "provider_order")
         storage.removeObject(forKey: "auth_method_codex")
         storage.removeObject(forKey: "auth_method_antigravity")
         storage.removeObject(forKey: "auth_method_opencode")
@@ -393,6 +438,7 @@ public class AuthManager: ObservableObject {
         case .antigravity: return antigravityCreds
         case .codex: return codexCreds
         case .opencodeGo: return opencodeGoCreds
+        case .claude: return claudeCreds
         }
     }
 
@@ -436,6 +482,9 @@ public class AuthManager: ObservableObject {
             openCodeTokens = nil
             openCodeAuthState = .signedOut
             setOpenCodeAuthMethod(.apiKey)
+        case .claude:
+            claudeCreds = newCreds
+            save(newCreds, key: claudeKey)
         }
         return true
     }
@@ -455,7 +504,177 @@ public class AuthManager: ObservableObject {
             signOutOpenCode()
             opencodeGoCreds = cleared
             save(cleared, key: opencodeKey)
+        case .claude:
+            claudeCreds = cleared
+            save(cleared, key: claudeKey)
+            claudeUsage = nil
+            claudeUsageError = nil
+            // Drop the published record so the widget stops showing stale usage.
+            if var snapshot = SharedUsageStore.load() {
+                snapshot.records["claude"] = nil
+                try? SharedUsageStore.save(snapshot)
+                reloadWidgets()
+            }
         }
+    }
+
+    // MARK: - Claude usage
+
+    /// True when a valid sync URL and a secret are both saved.
+    public var claudeSyncConfigured: Bool {
+        Self.normalizedSyncURL(claudeSyncURL) != nil && !(claudeSyncSecret ?? "").isEmpty
+    }
+
+    /// True when Claude can be refreshed at all (sync and/or a manual token).
+    public var claudeConfigured: Bool {
+        claudeSyncConfigured || (claudeCreds.isLoggedIn && !claudeCreds.apiKey.isEmpty)
+    }
+
+    /// Accepts `host:port`, `http://host:port` or a full URL; defaults the
+    /// scheme to http and the path to `/token`.
+    nonisolated public static func normalizedSyncURL(_ raw: String) -> URL? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        if !text.contains("://") { text = "http://" + text }
+        guard var components = URLComponents(string: text),
+              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = components.host, !host.isEmpty else { return nil }
+        if components.path.isEmpty || components.path == "/" { components.path = "/token" }
+        return components.url
+    }
+
+    /// Saves the sync endpoint. The secret goes to the Keychain, the URL to
+    /// UserDefaults. Returns false if the URL is invalid, the secret is empty,
+    /// or the Keychain write fails.
+    @discardableResult
+    public func configureClaudeSync(url: String, secret: String) -> Bool {
+        let cleanSecret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let normalized = Self.normalizedSyncURL(url), !cleanSecret.isEmpty else { return false }
+        do {
+            try claudeSyncSecretStore.save(cleanSecret)
+        } catch {
+            return false
+        }
+        claudeSyncSecret = cleanSecret
+        claudeSyncURL = normalized.absoluteString
+        defaults.set(claudeSyncURL, forKey: claudeSyncURLKey)
+        claudeSyncedToken = nil
+        return true
+    }
+
+    public func clearClaudeSync() {
+        try? claudeSyncSecretStore.delete()
+        claudeSyncSecret = nil
+        claudeSyncURL = ""
+        claudeSyncedToken = nil
+        claudeSyncWarning = nil
+        defaults.removeObject(forKey: claudeSyncURLKey)
+    }
+
+    /// Picks the token for this refresh: the desktop's fresh one if sync works,
+    /// else a still-valid earlier synced one, else the manually saved token.
+    private func resolveClaudeToken() async throws -> (token: String, source: ClaudeTokenSource, warning: String?) {
+        var syncError: Error?
+        if claudeSyncConfigured,
+           let url = Self.normalizedSyncURL(claudeSyncURL),
+           let secret = claudeSyncSecret {
+            do {
+                let synced = try await claudeTokenSync.fetchToken(url: url, secret: secret)
+                guard synced.isValid(margin: 0) else { throw ClaudeTokenSyncError.expired }
+                claudeSyncedToken = synced
+                return (synced.accessToken, .sync, nil)
+            } catch {
+                syncError = error
+            }
+            if let cached = claudeSyncedToken, cached.isValid() {
+                return (cached.accessToken, .syncCached, syncError?.localizedDescription)
+            }
+        }
+        if claudeCreds.isLoggedIn, !claudeCreds.apiKey.isEmpty {
+            return (claudeCreds.apiKey, .manual, syncError?.localizedDescription)
+        }
+        throw syncError ?? ClaudeUsageError.missingToken
+    }
+
+    /// Fetch Claude subscription usage and publish it to the widget. Uses the
+    /// desktop-synced token when configured, falling back to the manual token.
+    @discardableResult
+    public func refreshClaudeUsage() async -> Bool {
+        let resolved: (token: String, source: ClaudeTokenSource, warning: String?)
+        do {
+            resolved = try await resolveClaudeToken()
+        } catch {
+            claudeTokenSource = nil
+            claudeSyncWarning = nil
+            claudeUsageError = error.localizedDescription
+            return false
+        }
+        claudeTokenSource = resolved.source
+        claudeSyncWarning = resolved.warning
+        do {
+            let usage = try await claudeUsageService.fetchUsage(accessToken: resolved.token)
+            claudeUsage = usage
+            claudeUsageError = nil
+
+            var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+            snapshot.records["claude"] = UsageSnapshot.Record(
+                id: "claude",
+                usedPercent: Double(usage.usedPercent),
+                detail: usage.detail,
+                status: usage.statusText,
+                hasRequestCount: false,
+                hasUsageData: usage.hasUsageData
+            )
+            snapshot.updatedAt = Date()
+            try? SharedUsageStore.save(snapshot)
+            reloadWidgets()
+            return true
+        } catch {
+            claudeUsageError = error.localizedDescription
+            return false
+        }
+    }
+
+    // MARK: - Provider order
+
+    /// Moves `id` one slot toward the front (`offset < 0`) or back (`offset > 0`).
+    public func moveProvider(_ id: String, by offset: Int) {
+        guard let index = providerOrder.firstIndex(of: id) else { return }
+        let target = index + offset
+        guard providerOrder.indices.contains(target) else { return }
+        var order = providerOrder
+        order.swapAt(index, target)
+        setProviderOrder(order)
+    }
+
+    public func resetProviderOrder() {
+        setProviderOrder(Self.defaultProviderOrder)
+    }
+
+    private func setProviderOrder(_ order: [String]) {
+        providerOrder = order
+        defaults.set(order, forKey: providerOrderKey)
+        // The widget cannot read UserDefaults, so ship the order in the snapshot.
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        snapshot.providerOrder = order
+        try? SharedUsageStore.save(snapshot)
+        reloadWidgets()
+    }
+
+    /// Drops unknown IDs and appends any provider missing from a stored order,
+    /// so adding a provider in an update never hides it.
+    static func normalizedOrder(_ stored: [String]?) -> [String] {
+        var seen = Set<String>()
+        var order = (stored ?? []).filter { defaultProviderOrder.contains($0) && seen.insert($0).inserted }
+        order.append(contentsOf: defaultProviderOrder.filter { !seen.contains($0) })
+        return order
+    }
+
+    private func reloadWidgets() {
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        #endif
     }
 
     // MARK: - Antigravity Google OAuth

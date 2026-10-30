@@ -14,6 +14,9 @@ public struct LoginSheetView: View {
     @State private var isSigningInWithGoogle: Bool = false
     @State private var isSigningInOpenCode: Bool = false
     @State private var openCodeLoginTask: Task<Void, Never>?
+    @State private var syncURLInput: String = ""
+    @State private var syncSecretInput: String = ""
+    @State private var isSavingSync: Bool = false
 
     private let oauthClientFactory: @MainActor () -> ChatGPTOAuthClient
     private let googleOAuthClientFactory: @MainActor () -> AntigravityOAuthClient
@@ -281,6 +284,21 @@ public struct LoginSheetView: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        if selectedTab == .claude {
+                            claudeSyncSection
+
+                            Divider()
+
+                            Text("Manual token (fallback)")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+
+                            Text("Paste a Claude Code OAuth access token with the user:profile scope. Usage comes from Anthropic's undocumented /api/oauth/usage endpoint, which may change. API keys (sk-ant-api…) are not accepted by it.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
                         // Input fields
                         VStack(alignment: .leading, spacing: 12) {
                             Text("API Key / Token")
@@ -377,13 +395,14 @@ public struct LoginSheetView: View {
 
                         ForEach(ServiceProviderType.allCases) { svc in
                             let creds = authManager.credentials(for: svc)
+                            let connected = creds.isLoggedIn || (svc == .claude && authManager.claudeSyncConfigured)
                             HStack {
                                 Image(systemName: svc.icon)
                                     .foregroundColor(svc.brandColor)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(svc.displayName)
                                         .font(.subheadline.bold())
-                                    if creds.isLoggedIn {
+                                    if connected {
                                         Text(creds.identifier.isEmpty ? "Connected" : creds.identifier)
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
@@ -395,7 +414,7 @@ public struct LoginSheetView: View {
                                 }
                                 Spacer()
                                 Circle()
-                                    .fill(creds.isLoggedIn ? Color.green : Color.secondary.opacity(0.4))
+                                    .fill(connected ? Color.green : Color.secondary.opacity(0.4))
                                     .frame(width: 8, height: 8)
                             }
                             .padding(12)
@@ -420,7 +439,90 @@ public struct LoginSheetView: View {
         }
     }
 
+    @ViewBuilder
+    private var claudeSyncSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Desktop token sync")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            Text("Fetches the current Claude Code token from your desktop over Tailscale (scripts/claude-token-server.py), so it never expires on the phone. Falls back to the manual token below if the desktop is unreachable.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("http://100.110.102.104:8787/token", text: $syncURLInput)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .padding(12)
+                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+
+            SecureField("Sync secret", text: $syncSecretInput)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(12)
+                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+
+            HStack(spacing: 12) {
+                Button {
+                    saveClaudeSync()
+                } label: {
+                    Text(isSavingSync ? "Testing…" : "Save & Test Sync")
+                        .font(.subheadline.bold())
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(ServiceProviderType.claude.brandColor, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .disabled(isSavingSync)
+
+                if authManager.claudeSyncConfigured {
+                    Button {
+                        authManager.clearClaudeSync()
+                        syncURLInput = ""
+                        syncSecretInput = ""
+                        statusMessage = "Token sync removed."
+                        isSuccess = false
+                    } label: {
+                        Text("Remove")
+                            .font(.subheadline.bold())
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+        }
+    }
+
+    private func saveClaudeSync() {
+        guard authManager.configureClaudeSync(url: syncURLInput, secret: syncSecretInput) else {
+            statusMessage = "Enter a valid sync URL and the sync secret."
+            isSuccess = false
+            return
+        }
+        syncSecretInput = ""
+        isSavingSync = true
+        statusMessage = nil
+        Task { @MainActor in
+            let ok = await authManager.refreshClaudeUsage()
+            isSavingSync = false
+            if ok, authManager.claudeTokenSource == .sync {
+                statusMessage = "Token sync works."
+                isSuccess = true
+            } else if ok {
+                statusMessage = "Using the manual token: \(authManager.claudeSyncWarning ?? "sync unavailable")"
+                isSuccess = false
+            } else {
+                statusMessage = authManager.claudeUsageError
+                isSuccess = false
+            }
+        }
+    }
+
     private func loadCurrentServiceValues() {
+        syncURLInput = authManager.claudeSyncURL
         let creds = authManager.credentials(for: selectedTab)
         apiKeyInput = creds.apiKey
         identifierInput = creds.identifier
@@ -590,6 +692,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "Antigravity Cloud & Gemini Agent Platform"
         case .codex: return "OpenAI Codex & API Workspaces"
         case .opencodeGo: return "OpenCode Developer Network & Cloud Endpoints"
+        case .claude: return "Claude subscription limits (5-hour and weekly)"
         }
     }
 
@@ -598,6 +701,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "Account Email (optional)"
         case .codex: return "Organization ID (optional)"
         case .opencodeGo: return "Server Endpoint URL (optional)"
+        case .claude: return "Account Label (optional)"
         }
     }
 
@@ -606,6 +710,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "user@example.com"
         case .codex: return "org-12345678"
         case .opencodeGo: return "https://api.opencode.dev"
+        case .claude: return "you@example.com"
         }
     }
 }

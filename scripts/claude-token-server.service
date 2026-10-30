@@ -1,0 +1,25 @@
+# systemd USER unit for scripts/claude-token-server.py.
+# Install: see scripts/claude-token-sync.md. Not enabled by default.
+[Unit]
+Description=slopWidget Claude token sync server (Tailscale only)
+# The server resolves the Tailscale IP at start-up and exits if it is not up.
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h expands to the user's home directory. Adjust if the repo lives elsewhere.
+ExecStart=/usr/bin/python3 -I %h/.local/share/slopwidget/claude-token-server.py
+Restart=on-failure
+RestartSec=15
+# Hardening: it only needs to read two files and listen on one socket.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/slopwidget
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=64M
+
+[Install]
+WantedBy=default.target
