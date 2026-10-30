@@ -31,6 +31,13 @@ let package = Package(
                 // binary; nothing in the app references it, so dead_strip
                 // would otherwise remove it and the runtime could not resolve
                 // the widget tap by type name.
+                //
+                // CycleClaudeMeterIntent is kept alive by the reference in
+                // slopWidgetApp.init instead of a second `-u` here: `isim`
+                // collapses repeated `-Xlinker -u` pairs into one, leaving the
+                // second symbol as a bogus input file and failing the link.
+                // If that is ever fixed, add
+                //   "-Xlinker", "-u", "-Xlinker", "_$s10slopWidget22CycleClaudeMeterIntentVMn"
                 .unsafeFlags([
                     "-Xlinker", "-u",
                     "-Xlinker", "_$s10slopWidget24CycleOpenCodeMeterIntentVMn",

@@ -607,16 +607,7 @@ public class AuthManager: ObservableObject {
             claudeUsage = usage
             claudeUsageError = nil
 
-            var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
-            snapshot.records["claude"] = UsageSnapshot.Record(
-                id: "claude",
-                usedPercent: Double(usage.usedPercent),
-                detail: usage.detail,
-                status: usage.statusText,
-                hasRequestCount: false,
-                hasUsageData: usage.hasUsageData
-            )
-            snapshot.updatedAt = Date()
+            let snapshot = Self.snapshot(merging: usage, into: SharedUsageStore.load() ?? UsageSnapshot())
             try? SharedUsageStore.save(snapshot)
             reloadWidgets()
             return true
@@ -624,6 +615,35 @@ public class AuthManager: ObservableObject {
             claudeUsageError = error.localizedDescription
             return false
         }
+    }
+
+    /// Returns `snapshot` with the Claude record and meters replaced by `usage`.
+    /// The user's tap selection is kept (nil until the first tap, which means
+    /// "show the most constrained window"); only the figures are replaced.
+    nonisolated static func snapshot(merging usage: ClaudeUsage, into snapshot: UsageSnapshot) -> UsageSnapshot {
+        var snapshot = snapshot
+        let meters = UsageSnapshot.ClaudeMeters(
+            fiveHour: usage.fiveHour?.utilization,
+            sevenDay: usage.sevenDay?.utilization
+        )
+        snapshot.claudeMeters = meters
+        var usedPercent = Double(usage.usedPercent)
+        var detail = usage.detail
+        if let window = meters.displayedWindow(selection: snapshot.claudeMeterSelection),
+           let percent = meters.percent(for: window) {
+            usedPercent = Double(min(100, max(0, Int(percent.rounded()))))
+            detail = UsageSnapshot.ClaudeMeters.label(for: window)
+        }
+        snapshot.records["claude"] = UsageSnapshot.Record(
+            id: "claude",
+            usedPercent: usedPercent,
+            detail: detail,
+            status: usage.statusText,
+            hasRequestCount: false,
+            hasUsageData: usage.hasUsageData
+        )
+        snapshot.updatedAt = Date()
+        return snapshot
     }
 
     /// Uses the OAuth session when signed in (renewing it as needed, and once
@@ -1184,6 +1204,19 @@ public class AuthManager: ObservableObject {
         WidgetCenter.shared.reloadAllTimelines()
         WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
         #endif
+    }
+
+    /// Cycles the Claude window (5-hour -> weekly -> 5-hour), skipping windows
+    /// without data. Until the first call the most constrained window is shown,
+    /// so the first call moves to the other window.
+    public func cycleClaudeMeter() {
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        guard let meters = snapshot.claudeMeters,
+              let next = meters.nextWindow(after: snapshot.claudeMeterSelection) else { return }
+        snapshot.claudeMeterSelection = next
+        UserDefaults.standard.set(next, forKey: "claudeMeterSelection")
+        try? SharedUsageStore.save(snapshot)
+        reloadWidgets()
     }
 
     /// Fetch the OpenCode Go allowance and publish it to the widget.

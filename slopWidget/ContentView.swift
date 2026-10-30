@@ -608,6 +608,8 @@ public struct ContentView: View {
             .onOpenURL { url in
                 if url.scheme == "slopwidget", url.host == "cycle" {
                     authManager.cycleOpenCodeMeter()
+                } else if url.scheme == "slopwidget", url.host == "cycle-claude" {
+                    authManager.cycleClaudeMeter()
                 }
             }
             .onAppear {

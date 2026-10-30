@@ -20,6 +20,8 @@ Built with SwiftUI + WidgetKit, cross-compiled on Linux with
 - **Interactive widget taps**: tapping the OpenCode Go percentage cycles the
   displayed window (rolling → weekly → monthly) **inline**, without launching
   the app.
+- **Claude tap-to-cycle**: tapping the Claude percentage switches between the
+  5-hour and weekly windows (the most constrained one is shown until you tap).
 - **Real usage data only**: no fabricated request counts. Providers that don't
   report a quota (such as Antigravity) show `—` and are excluded from the
   average, instead of a misleading `100/100`.
