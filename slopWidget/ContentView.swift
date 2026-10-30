@@ -641,6 +641,10 @@ public struct ContentView: View {
                 guard let usage else { return }
                 replaceProvider(with: usage.providerUsageItem)
             }
+            .onChange(of: authManager.antigravityUsage) { _, usage in
+                guard let usage else { return }
+                replaceProvider(with: usage.providerUsageItem)
+            }
         }
     }
 
@@ -654,7 +658,13 @@ public struct ContentView: View {
         if authManager.claudeCreds.isLoggedIn {
             await authManager.refreshClaudeUsage()
         }
+        if authManager.antigravityCreds.isLoggedIn || authManager.antigravityAuthMethod == .google {
+            await authManager.refreshAntigravityUsage()
+        }
         if let usage = authManager.claudeUsage {
+            replaceProvider(with: usage.providerUsageItem)
+        }
+        if let usage = authManager.antigravityUsage {
             replaceProvider(with: usage.providerUsageItem)
         }
         if let usage = authManager.chatGPTUsage {
@@ -689,6 +699,12 @@ public struct ContentView: View {
         if authManager.claudeCreds.isLoggedIn {
             await authManager.refreshClaudeUsage()
             if let usage = authManager.claudeUsage {
+                replaceProvider(with: usage.providerUsageItem)
+            }
+        }
+        if authManager.antigravityAuthMethod == .google || authManager.antigravityCreds.isLoggedIn {
+            await authManager.refreshAntigravityUsage()
+            if let usage = authManager.antigravityUsage {
                 replaceProvider(with: usage.providerUsageItem)
             }
         }
