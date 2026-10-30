@@ -1,0 +1,32 @@
+# systemd USER unit for scripts/claude-usage-relay.py
+#
+# Install:
+#   install -D -m 755 scripts/claude-usage-relay.py ~/.local/share/slopwidget/claude-usage-relay.py
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/claude-usage-relay.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-usage-relay.service
+#   cat ~/.config/slopwidget/relay-secret      # paste into slopWidget > Claude > Relay secret
+#
+# Stop / remove:
+#   systemctl --user disable --now claude-usage-relay.service
+#
+# The relay binds only to the Tailscale IPv4 address, so it must start after
+# tailscaled is up; Restart=on-failure keeps retrying until the address exists.
+
+[Unit]
+Description=Claude usage relay for slopWidget (Tailscale only)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/share/slopwidget/claude-usage-relay.py
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_UNIX
+
+[Install]
+WantedBy=default.target

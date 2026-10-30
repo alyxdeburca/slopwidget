@@ -58,17 +58,38 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
     public var openCodeMeters: OpenCodeMeters?
     /// "rolling", "weekly", or "monthly".
     public var openCodeMeterSelection: String?
+    /// Provider IDs in the order the user wants them shown. nil means default.
+    public var providerOrder: [String]?
 
     public init(
         records: [String: Record] = [:],
         updatedAt: Date = Date(),
         openCodeMeters: OpenCodeMeters? = nil,
-        openCodeMeterSelection: String? = nil
+        openCodeMeterSelection: String? = nil,
+        providerOrder: [String]? = nil
     ) {
         self.records = records
         self.updatedAt = updatedAt
         self.openCodeMeters = openCodeMeters
         self.openCodeMeterSelection = openCodeMeterSelection
+        self.providerOrder = providerOrder
+    }
+
+    /// Stable sort of `items` by their position in `order`. Items missing from
+    /// `order` keep their relative position after the ones that are listed.
+    public static func ordered<T>(_ items: [T], by order: [String]?, id: (T) -> String) -> [T] {
+        guard let order, !order.isEmpty else { return items }
+        let rank = Dictionary(
+            order.enumerated().map { ($0.element, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return items.enumerated()
+            .sorted { lhs, rhs in
+                let l = rank[id(lhs.element)] ?? Int.max
+                let r = rank[id(rhs.element)] ?? Int.max
+                return l == r ? lhs.offset < rhs.offset : l < r
+            }
+            .map(\.element)
     }
 }
 

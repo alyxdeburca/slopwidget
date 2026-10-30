@@ -14,6 +14,11 @@ public struct LoginSheetView: View {
     @State private var isSigningInWithGoogle: Bool = false
     @State private var isSigningInOpenCode: Bool = false
     @State private var openCodeLoginTask: Task<Void, Never>?
+    @State private var relayURLInput: String = ""
+    @State private var relaySecretInput: String = ""
+    @State private var relayMessage: String?
+    @State private var relayMessageIsSuccess: Bool = false
+    @State private var isTestingRelay: Bool = false
 
     private let oauthClientFactory: @MainActor () -> ChatGPTOAuthClient
     private let googleOAuthClientFactory: @MainActor () -> AntigravityOAuthClient
@@ -64,8 +69,7 @@ public struct LoginSheetView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            let creds = authManager.credentials(for: selectedTab)
-                            if creds.isLoggedIn {
+                            if isConnected(selectedTab) {
                                 Label("Connected", systemImage: "checkmark.circle.fill")
                                     .font(.caption.bold())
                                     .foregroundColor(.green)
@@ -281,6 +285,23 @@ public struct LoginSheetView: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        if selectedTab == .claude {
+                            claudeRelaySection
+
+                            Divider()
+
+                            Text("Direct token (fallback)")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if selectedTab == .claude {
+                            Text("Paste a Claude Code OAuth access token with the user:profile scope. Usage comes from Anthropic's undocumented /api/oauth/usage endpoint, which may change. API keys (sk-ant-api…) are not accepted by it.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
                         // Input fields
                         VStack(alignment: .leading, spacing: 12) {
                             Text("API Key / Token")
@@ -377,13 +398,14 @@ public struct LoginSheetView: View {
 
                         ForEach(ServiceProviderType.allCases) { svc in
                             let creds = authManager.credentials(for: svc)
+                            let connected = isConnected(svc)
                             HStack {
                                 Image(systemName: svc.icon)
                                     .foregroundColor(svc.brandColor)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(svc.displayName)
                                         .font(.subheadline.bold())
-                                    if creds.isLoggedIn {
+                                    if connected {
                                         Text(creds.identifier.isEmpty ? "Connected" : creds.identifier)
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
@@ -395,7 +417,7 @@ public struct LoginSheetView: View {
                                 }
                                 Spacer()
                                 Circle()
-                                    .fill(creds.isLoggedIn ? Color.green : Color.secondary.opacity(0.4))
+                                    .fill(connected ? Color.green : Color.secondary.opacity(0.4))
                                     .frame(width: 8, height: 8)
                             }
                             .padding(12)
@@ -420,7 +442,112 @@ public struct LoginSheetView: View {
         }
     }
 
+    private func isConnected(_ service: ServiceProviderType) -> Bool {
+        service == .claude ? authManager.isClaudeConnected : authManager.credentials(for: service).isLoggedIn
+    }
+
+    private var claudeRelaySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Desktop relay (recommended)")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            Text("Run scripts/claude-usage-relay.py on the machine where you use Claude Code. It shares only the usage numbers over Tailscale; no Claude token is stored on this phone.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("http://100.x.y.z:8787", text: $relayURLInput)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(12)
+                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+
+            SecureField("Relay secret", text: $relaySecretInput)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(12)
+                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+
+            if let message = relayMessage {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: relayMessageIsSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundColor(relayMessageIsSuccess ? .green : .orange)
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    saveAndTestRelay()
+                } label: {
+                    HStack {
+                        if isTestingRelay {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                        }
+                        Text(isTestingRelay ? "Testing…" : "Save & Test Relay")
+                    }
+                    .font(.subheadline.bold())
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(selectedTab.brandColor, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .disabled(isTestingRelay)
+
+                if authManager.isClaudeRelayConfigured {
+                    Button {
+                        authManager.clearClaudeRelay()
+                        relayURLInput = ""
+                        relaySecretInput = ""
+                        relayMessage = "Relay removed."
+                        relayMessageIsSuccess = false
+                    } label: {
+                        Text("Remove")
+                            .font(.subheadline.bold())
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+        }
+    }
+
+    private func saveAndTestRelay() {
+        do {
+            try authManager.saveClaudeRelay(url: relayURLInput, secret: relaySecretInput)
+        } catch {
+            relayMessage = error.localizedDescription
+            relayMessageIsSuccess = false
+            return
+        }
+        isTestingRelay = true
+        relayMessage = nil
+        Task { @MainActor in
+            let ok = await authManager.refreshClaudeUsage()
+            isTestingRelay = false
+            if ok {
+                relayMessage = "Connected to the relay."
+                relayMessageIsSuccess = true
+            } else {
+                relayMessage = authManager.claudeUsageError ?? "The relay did not answer."
+                relayMessageIsSuccess = false
+            }
+        }
+    }
+
     private func loadCurrentServiceValues() {
+        relayURLInput = authManager.claudeRelayURLText
+        relaySecretInput = authManager.claudeRelaySecret()
+        relayMessage = nil
         let creds = authManager.credentials(for: selectedTab)
         apiKeyInput = creds.apiKey
         identifierInput = creds.identifier
@@ -590,6 +717,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "Antigravity Cloud & Gemini Agent Platform"
         case .codex: return "OpenAI Codex & API Workspaces"
         case .opencodeGo: return "OpenCode Developer Network & Cloud Endpoints"
+        case .claude: return "Claude subscription limits (5-hour and weekly)"
         }
     }
 
@@ -598,6 +726,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "Account Email (optional)"
         case .codex: return "Organization ID (optional)"
         case .opencodeGo: return "Server Endpoint URL (optional)"
+        case .claude: return "Account Label (optional)"
         }
     }
 
@@ -606,6 +735,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "user@example.com"
         case .codex: return "org-12345678"
         case .opencodeGo: return "https://api.opencode.dev"
+        case .claude: return "you@example.com"
         }
     }
 }

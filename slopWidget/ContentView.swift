@@ -84,6 +84,19 @@ public enum SampleUsageData {
             tokensUsed: "—",
             status: "Not synced",
             hasUsageData: false
+        ),
+        ProviderUsageItem(
+            id: "claude",
+            name: "Claude",
+            shortName: "CLD",
+            icon: "text.bubble.fill",
+            color: ServiceProviderType.claude.brandColor,
+            requestsUsed: 0,
+            requestLimit: 100,
+            tokensUsed: "—",
+            status: "Not synced",
+            hasRequestCount: false,
+            hasUsageData: false
         )
     ]
 
@@ -262,7 +275,7 @@ public struct Widget1x3View: View {
             }
 
             HStack(spacing: 8) {
-                ForEach(providers) { item in
+                ForEach(providers.prefix(3)) { item in
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 4) {
                             Image(systemName: item.icon)
@@ -322,7 +335,7 @@ public struct Widget2x2View: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 8) {
             // Header
             HStack {
                 HStack(spacing: 8) {
@@ -332,7 +345,8 @@ public struct Widget2x2View: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("AI Operations")
                             .font(.headline)
-                        Text("Antigravity \u{2022} Codex \u{2022} OpenCode")
+                        Text(providers.map(\.name).joined(separator: " \u{2022} "))
+                            .lineLimit(1)
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                     }
@@ -350,16 +364,16 @@ public struct Widget2x2View: View {
 
             Divider()
 
-            // 3 Provider Detailed Rows
-            VStack(spacing: 12) {
+            // Provider Detailed Rows
+            VStack(spacing: 6) {
                 ForEach(providers) { item in
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 2) {
                         HStack {
                             Image(systemName: item.icon)
                                 .font(.footnote)
                                 .foregroundColor(item.color)
                             Text(item.name)
-                                .font(.subheadline.bold())
+                                .font(.footnote.bold())
 
                             Spacer()
 
@@ -371,7 +385,7 @@ public struct Widget2x2View: View {
                                 .foregroundColor(item.color)
 
                             Text(item.percentageText)
-                                .font(.subheadline.bold())
+                                .font(.footnote.bold())
                                 .foregroundColor(item.color)
                         }
 
@@ -382,21 +396,21 @@ public struct Widget2x2View: View {
                         HStack {
                             if item.hasRequestCount {
                                 Text("Requests: \(item.requestsUsed) of \(item.requestLimit)")
-                                    .font(.caption2)
+                                    .font(.system(size: 9))
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
                             Text("Tokens: \(item.tokensUsed)")
-                                .font(.caption2.bold())
+                                .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .padding(10)
+                    .padding(7)
                     .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 0)
 
             // Footer
             HStack {
@@ -409,7 +423,7 @@ public struct Widget2x2View: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(18)
+        .padding(14)
         .frame(width: 338, height: 338)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 28))
         .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
@@ -427,6 +441,10 @@ public struct ContentView: View {
     @State private var widgetRefreshStatus: String?
 
     public init() {}
+
+    private var orderedProviders: [ProviderUsageItem] {
+        UsageSnapshot.ordered(providers, by: authManager.providerOrder, id: \.id)
+    }
 
     public var body: some View {
         NavigationStack {
@@ -461,10 +479,14 @@ public struct ContentView: View {
                             }
                         }
 
-                        HStack(spacing: 8) {
-                            servicePill(type: .antigravity)
-                            servicePill(type: .codex)
-                            servicePill(type: .opencodeGo)
+                        LazyVGrid(
+                            columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
+                            alignment: .leading,
+                            spacing: 8
+                        ) {
+                            ForEach(ServiceProviderType.allCases) { type in
+                                servicePill(type: type)
+                            }
                         }
                     }
                     .padding(16)
@@ -513,21 +535,23 @@ public struct ContentView: View {
                         Spacer()
                         switch selectedTab {
                         case 0:
-                            Widget1x1View(providers: providers)
+                            Widget1x1View(providers: orderedProviders)
                         case 1:
-                            Widget1x2View(providers: providers)
+                            Widget1x2View(providers: orderedProviders)
                         case 2:
-                            Widget1x3View(providers: providers)
+                            Widget1x3View(providers: orderedProviders)
                         case 3:
-                            Widget2x2View(providers: providers)
+                            Widget2x2View(providers: orderedProviders)
                         default:
-                            Widget1x1View(providers: providers)
+                            Widget1x1View(providers: orderedProviders)
                         }
                         Spacer()
                     }
                     .frame(maxWidth: .infinity, minHeight: 380)
                     .padding(.vertical, 20)
                     .background(Color(.systemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+
+                    providerOrderSection
 
                     // Adjust Values
                     VStack(alignment: .leading, spacing: 14) {
@@ -602,6 +626,10 @@ public struct ContentView: View {
                 guard let usage else { return }
                 replaceOpenCodeProvider(with: usage)
             }
+            .onChange(of: authManager.claudeUsage) { _, usage in
+                guard let usage else { return }
+                replaceProvider(with: usage.providerUsageItem)
+            }
         }
     }
 
@@ -612,6 +640,12 @@ public struct ContentView: View {
         defer { isRefreshingWidget = false }
         await authManager.refreshChatGPTUsage()
         await authManager.refreshOpenCodeUsage()
+        if authManager.isClaudeConnected {
+            await authManager.refreshClaudeUsage()
+        }
+        if let usage = authManager.claudeUsage {
+            replaceProvider(with: usage.providerUsageItem)
+        }
         if let usage = authManager.chatGPTUsage {
             replaceCodexProvider(with: usage.providerUsageItem)
         }
@@ -641,10 +675,69 @@ public struct ContentView: View {
                 replaceOpenCodeProvider(with: usage)
             }
         }
+        if authManager.isClaudeConnected {
+            await authManager.refreshClaudeUsage()
+            if let usage = authManager.claudeUsage {
+                replaceProvider(with: usage.providerUsageItem)
+            }
+        }
+    }
+
+    // MARK: Widget order
+
+    private var providerOrderSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Widget Order")
+                    .font(.headline)
+                Spacer()
+                Button("Reset") {
+                    authManager.resetProviderOrder()
+                }
+                .font(.caption.bold())
+                .disabled(authManager.providerOrder == AuthManager.defaultProviderOrder)
+            }
+            Text("Widgets list providers top to bottom, left to right. The 1x2 widget shows the first two and the 1x3 and medium widgets the first three.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(orderedProviders) { item in
+                let position = authManager.providerOrder.firstIndex(of: item.id) ?? 0
+                HStack(spacing: 10) {
+                    Image(systemName: item.icon)
+                        .foregroundColor(item.color)
+                        .frame(width: 20)
+                    Text(item.name)
+                        .font(.subheadline.bold())
+                    Spacer()
+                    Button {
+                        authManager.moveProvider(item.id, by: -1)
+                    } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(position == 0)
+                    .accessibilityLabel("Move \(item.name) up")
+                    Button {
+                        authManager.moveProvider(item.id, by: 1)
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(position >= authManager.providerOrder.count - 1)
+                    .accessibilityLabel("Move \(item.name) down")
+                }
+                .buttonStyle(.borderless)
+                .padding(12)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
     }
 
     private func replaceCodexProvider(with item: ProviderUsageItem) {
-        if let index = providers.firstIndex(where: { $0.id == "codex" }) {
+        replaceProvider(with: item)
+    }
+
+    private func replaceProvider(with item: ProviderUsageItem) {
+        if let index = providers.firstIndex(where: { $0.id == item.id }) {
             providers[index] = item
         } else {
             providers.append(item)
@@ -681,6 +774,7 @@ public struct ContentView: View {
                 .foregroundColor(type.brandColor)
             Text(type.displayName)
                 .font(.system(size: 10, weight: .semibold))
+                .lineLimit(1)
             Circle()
                 .fill(creds.isLoggedIn ? Color.green : Color.secondary.opacity(0.4))
                 .frame(width: 6, height: 6)

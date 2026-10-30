@@ -54,7 +54,7 @@ final class ProviderUsageTests: XCTestCase {
     @MainActor
     func testSampleUsageAverage() {
         let providers = SampleUsageData.providers
-        XCTAssertEqual(providers.count, 3)
+        XCTAssertEqual(providers.count, 4)
         let avg = SampleUsageData.averagePercentage
         XCTAssertGreaterThan(avg, 0)
         XCTAssertLessThanOrEqual(avg, 100)

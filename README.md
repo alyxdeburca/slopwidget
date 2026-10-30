@@ -3,8 +3,8 @@
 # slopWidget
 
 A native iOS app and home-screen widget that tracks your AI coding-assistant
-usage across **Antigravity**, **Codex (ChatGPT)**, and **OpenCode Go** — in one
-place, on the home screen, without opening the app.
+usage across **Antigravity**, **Codex (ChatGPT)**, **OpenCode Go**, and
+**Claude** — in one place, on the home screen, without opening the app.
 
 Built with SwiftUI + WidgetKit, cross-compiled on Linux with
 [isim](https://github.com/kolabs-dev/isim) and [xtool](https://github.com/xtool-org/xtool).
@@ -13,8 +13,8 @@ Built with SwiftUI + WidgetKit, cross-compiled on Linux with
 
 ## What it does
 
-- **One dashboard** for three providers: Antigravity, Codex (OpenAI), and
-  OpenCode Go — each with a progress bar, percentage, status, and token detail.
+- **One dashboard** for four providers: Antigravity, Codex (OpenAI),
+  OpenCode Go, and Claude — each with a progress bar, percentage, status, and token detail.
 - **Home-screen widgets** in four sizes (small 1×1, medium 1×2, large 1×3,
   and 2×2) plus lock-screen circular/rectangular accessories.
 - **Interactive widget taps**: tapping the OpenCode Go percentage cycles the
@@ -27,6 +27,14 @@ Built with SwiftUI + WidgetKit, cross-compiled on Linux with
   - **Codex**: ChatGPT OAuth (PKCE + loopback callback) plus manual token.
   - **Antigravity**: Google OAuth (PKCE + loopback) plus manual API key.
   - **OpenCode Go**: OpenCode device authorization grant plus manual token.
+  - **Claude**: paste a Claude Code OAuth access token (needs the `user:profile`
+    scope). Usage (5-hour and weekly windows, whichever is higher) comes from
+    Anthropic's undocumented `/api/oauth/usage` endpoint, so it may change. There
+    is no in-app Claude sign-in yet.
+- **Reorderable widgets**: use the up/down arrows under **Widget Order** in the
+  app to choose which provider comes first. The order is shared with the widget
+  and applies to every size; the 1x2 shows the first two providers, and the
+  1x3 and medium widgets the first three.
 - **Shared app/widget state** via a Keychain access group (free provisioning
   has no App Groups), so the widget reflects the latest fetch.
 - **Manual refresh** button and 15-minute timeline reloads.
@@ -127,6 +135,31 @@ OAuth 2.0 device authorization grant (verified against `opencode` v2.2.0):
 
 Access/refresh tokens are stored in a Keychain item
 (`com.example.slopWidget.opencode`) separate from the other providers.
+
+## Claude usage relay (optional)
+
+Claude's usage numbers come from Anthropic's undocumented OAuth usage endpoint,
+which needs a Claude Code access token that lasts about 8 hours. Instead of
+pasting that token into the phone, run a small relay on the desktop where you
+use Claude Code. It reads `~/.claude/.credentials.json`, fetches usage itself,
+and serves only the numbers (never a token) over your tailnet.
+
+1. Install and start it (see `scripts/claude-usage-relay.service` for the full steps):
+   `systemctl --user enable --now claude-usage-relay.service`.
+   It binds only to the Tailscale IPv4 address, port 8787, and generates a
+   shared secret at `~/.config/slopwidget/relay-secret` (mode 0600).
+2. In the app: Service Accounts > Claude > Desktop relay. Enter
+   `http://<tailscale-ip>:8787` and the contents of the secret file, then
+   **Save & Test Relay**. Leave Tailscale on, on the phone.
+3. When the desktop's access token expires the relay answers `token_expired`
+   until Claude Code refreshes it (any `claude` run does). The relay never
+   calls the OAuth refresh endpoint itself because refresh tokens rotate and a
+   second client would log Claude Code out.
+
+The app allows the plain-HTTP relay through App Transport Security with
+`NSAllowsLocalNetworking` only (public hosts still require HTTPS). Tailscale
+already encrypts the traffic. For an HTTPS URL instead, run the relay with
+`--bind 127.0.0.1` and publish it with `tailscale serve --bg --https=8443 http://127.0.0.1:8787`.
 
 ## Testing
 
