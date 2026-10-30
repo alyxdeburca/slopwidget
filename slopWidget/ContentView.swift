@@ -443,7 +443,6 @@ public struct Widget2x2View: View {
 public struct ContentView: View {
     @ObservedObject private var authManager = AuthManager.shared
     @State private var providers: [ProviderUsageItem] = []
-    @State private var selectedTab: Int = 0
     @State private var showingLoginSheet: Bool = false
     @State private var isRefreshingUsage: Bool = false
     @State private var isRefreshingWidget: Bool = false
@@ -504,7 +503,7 @@ public struct ContentView: View {
                     // Header
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(alignment: .firstTextBaseline) {
-                            Text("AI Usage Widget Gallery")
+                            Text("Home-Screen Widget")
                                 .font(.title.bold())
                             Spacer()
                             Button {
@@ -520,7 +519,7 @@ public struct ContentView: View {
                             .buttonStyle(.bordered)
                             .disabled(isRefreshingWidget)
                         }
-                        Text("Live preview of 1x1, 1x2, 1x3, and 2x2 widget formats.")
+                        Text("Reload the widget with the latest usage from your connected services.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         if let widgetRefreshStatus {
@@ -530,76 +529,9 @@ public struct ContentView: View {
                         }
                     }
 
-                    // Widget Selector Tabs
-                    Picker("Widget Size", selection: $selectedTab) {
-                        Text("1x1").tag(0)
-                        Text("1x2").tag(1)
-                        Text("1x3").tag(2)
-                        Text("2x2").tag(3)
-                    }
-                    .pickerStyle(.segmented)
-
-                    // Widget Display Canvas
-                    VStack {
-                        Spacer()
-                        switch selectedTab {
-                        case 0:
-                            Widget1x1View(providers: orderedProviders)
-                        case 1:
-                            Widget1x2View(providers: orderedProviders)
-                        case 2:
-                            Widget1x3View(providers: orderedProviders)
-                        case 3:
-                            Widget2x2View(providers: orderedProviders)
-                        default:
-                            Widget1x1View(providers: orderedProviders)
-                        }
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 380)
-                    .padding(.vertical, 20)
-                    .background(Color(.systemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-
                     refreshSection
 
                     providerOrderSection
-
-                    // Adjust Values
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("Tweak Placeholder Metrics")
-                            .font(.headline)
-
-                        ForEach(providers.indices, id: \.self) { idx in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Image(systemName: providers[idx].icon)
-                                        .foregroundColor(providers[idx].color)
-                                    Text(providers[idx].name)
-                                        .font(.subheadline.bold())
-                                    Spacer()
-                                    Text(providers[idx].hasUsageData
-                                         ? (providers[idx].hasRequestCount
-                                            ? "\(providers[idx].requestsUsed) / \(providers[idx].requestLimit) reqs (\(providers[idx].percentageInt)%)"
-                                            : "\(providers[idx].percentageInt)% used")
-                                         : "Usage not available")
-                                        .font(.caption.bold())
-                                        .foregroundColor(providers[idx].color)
-                                }
-
-                                Slider(
-                                    value: Binding(
-                                        get: { Double(providers[idx].requestsUsed) },
-                                        set: { providers[idx].requestsUsed = Int($0) }
-                                    ),
-                                    in: 0...Double(providers[idx].requestLimit),
-                                    step: 1
-                                    )
-                                .tint(providers[idx].color)
-                            }
-                            .padding(12)
-                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-                        }
-                    }
                 }
                 .padding()
             }
