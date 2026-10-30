@@ -37,6 +37,18 @@ jobs:
         run: |
           xtool dev build
 
+      - name: Stamp version
+        # xtool always writes 1.0.0 (1). AltStore/SideStore detect updates by
+        # comparing the version and build number, so stamp the real ones.
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          for plist in xtool/slopWidget.app/Info.plist xtool/slopWidget.app/PlugIns/*.appex/Info.plist; do
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$plist"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$plist"
+          done
+
       - name: Package IPA
         run: |
           rm -rf Payload && mkdir Payload
@@ -44,9 +56,27 @@ jobs:
           zip -r slopWidget.ipa Payload
           ls -la slopWidget.ipa
 
+      - name: Generate AltStore / SideStore source
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          # The previous release's source.json keeps older versions listed.
+          curl -fsSL -o previous-source.json \
+            "https://github.com/${{ github.repository }}/releases/latest/download/source.json" || true
+          python3 scripts/generate-altstore-source.py \
+            --repo "${{ github.repository }}" \
+            --tag "$TAG" \
+            --build "${{ github.run_number }}" \
+            --ipa slopWidget.ipa \
+            --previous previous-source.json \
+            --output source.json
+          cat source.json
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: slopWidget.ipa
+          files: |
+            slopWidget.ipa
+            source.json
           generate_release_notes: true

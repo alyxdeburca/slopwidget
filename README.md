@@ -115,6 +115,8 @@ usage window in place (see "Tap-to-cycle for every provider" above).
   Linux replacement for Xcode's `appintentsmetadataprocessor`.
 - **[Tests/slopWidgetTests/](Tests/slopWidgetTests/)**: 89-test suite.
 - **[.github/workflows/test.yml](.github/workflows/test.yml)**: CI test automation.
+- **[.github/workflows/release.yml](.github/workflows/release.yml)**: builds the
+  IPA and publishes the release plus the AltStore/SideStore `source.json`.
 
 ## Antigravity "Sign in with Google"
 
@@ -181,6 +183,32 @@ added or changed a `Cycle*MeterIntent.swift`:
 ```bash
 ./scripts/update-appintents-metadata.sh
 ```
+
+### Over-the-air updates (AltStore / SideStore)
+
+iOS only runs code signed for your device, so an app can't patch itself. The
+practical OTA route for a free-provisioned app is an
+[AltStore](https://altstore.io) or [SideStore](https://sidestore.io) source:
+the store re-signs each new IPA with your Apple ID, installs it over the old
+one (keeping your Keychain credentials), and refreshes the 7-day signature.
+
+1. In AltStore or SideStore, add the source (Sources → +):
+   ```
+   https://github.com/alyxdeburca/slopwidget/releases/latest/download/source.json
+   ```
+2. Install **slopWidget** from it. From then on, new releases show up as
+   updates in the store.
+
+To publish an update, run the **Build IPA & Release** workflow with a new tag
+(e.g. `v1.0.6`). The workflow stamps the tag and run number into the app's
+`CFBundleShortVersionString` / `CFBundleVersion`, builds the unsigned IPA, and
+attaches it with a regenerated `source.json`
+([scripts/generate-altstore-source.py](scripts/generate-altstore-source.py)),
+which keeps earlier versions listed. Local `xtool dev run` builds are unaffected.
+
+The Keychain access group shared between the app and the widget is resolved at
+runtime, so it still works after the store re-signs the app under a different
+team ID and bundle ID.
 
 ### Regenerating screenshots
 
