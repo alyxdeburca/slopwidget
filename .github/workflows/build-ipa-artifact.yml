@@ -1,0 +1,46 @@
+name: Build IPA (artifact only)
+
+# Temporary: builds an unsigned IPA from this branch and uploads it as a
+# workflow artifact. Makes no release or tag. Not intended to be merged.
+on:
+  push:
+    branches: [ci/ipa-artifact-pr4]
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    name: Build IPA artifact
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Install xtool
+        run: |
+          brew install xtool-org/tap/xtool
+          xtool --version
+
+      - name: Generate Xcode project
+        run: xtool dev generate-xcode-project
+
+      - name: Build app (device)
+        run: xtool dev build
+
+      - name: Package IPA
+        run: |
+          rm -rf Payload && mkdir Payload
+          cp -R xtool/slopWidget.app Payload/
+          zip -r slopWidget.ipa Payload
+          ls -la slopWidget.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: slopWidget-ipa
+          path: slopWidget.ipa
+          retention-days: 7
