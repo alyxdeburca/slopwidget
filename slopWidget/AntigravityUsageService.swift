@@ -142,15 +142,17 @@ public struct URLSessionAntigravityUsageFetcher: AntigravityUsageFetching {
     public func fetchUsage(accessToken: String, projectID: String?) async throws -> AntigravityUsage {
         guard !accessToken.isEmpty else { throw AntigravityUsageError.missingToken }
 
-        let host = "cloudcode-pa.googleapis.com"
+        let project = projectID ?? "aicode-consumers"
+        let host = "daily-cloudcode-pa.googleapis.com"
         let url = URL(string: "https://\(host)/v1internal:retrieveUserQuotaSummary")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("antigravity/1.0", forHTTPHeaderField: "User-Agent")
 
-        let body: [String: Any] = projectID.map { ["project": $0] } ?? [:]
+        let body: [String: Any] = ["project": project]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         let data: Data
