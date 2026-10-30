@@ -11,6 +11,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
     case antigravity = "antigravity"
     case codex = "codex"
     case opencodeGo = "opencode-go"
+    case claude = "claude"
 
     public var id: String { rawValue }
 
@@ -19,6 +20,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
         case .antigravity: return "Antigravity"
         case .codex: return "Codex"
         case .opencodeGo: return "OpenCode Go"
+        case .claude: return "Claude"
         }
     }
 
@@ -27,6 +29,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
         case .antigravity: return "sparkles"
         case .codex: return "terminal.fill"
         case .opencodeGo: return "bolt.fill"
+        case .claude: return "text.bubble.fill"
         }
     }
 
@@ -35,6 +38,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
         case .antigravity: return Color(red: 0.65, green: 0.40, blue: 0.98)
         case .codex: return Color(red: 0.20, green: 0.80, blue: 0.58)
         case .opencodeGo: return Color(red: 0.25, green: 0.65, blue: 0.98)
+        case .claude: return Color(red: 0.85, green: 0.47, blue: 0.34)
         }
     }
 
@@ -43,6 +47,7 @@ public enum ServiceProviderType: String, CaseIterable, Identifiable {
         case .antigravity: return "ag_live_..."
         case .codex: return "sk-proj-..."
         case .opencodeGo: return "ocg_pat_..."
+        case .claude: return "sk-ant-oat01-..."
         }
     }
 }
@@ -227,6 +232,56 @@ public enum OpenCodeAuthState: Equatable, Sendable {
     }
 }
 
+/// How the Claude provider is currently authenticated.
+public enum ClaudeAuthMethod: String, Codable, Sendable {
+    /// A manually pasted OAuth access token stored in `ServiceCredentials`.
+    case apiKey
+    /// A "Sign in with Claude" session whose tokens live in the Keychain.
+    case oauth
+}
+
+/// Observable state of the "Sign in with Claude" flow.
+public enum ClaudeAuthState: Equatable, Sendable {
+    case signedOut
+    case authorizing
+    case exchanging
+    case signedIn(identifier: String, expiresAt: Date?)
+    case failed(String)
+
+    public var isSignedIn: Bool {
+        if case .signedIn = self { return true }
+        return false
+    }
+
+    public var isBusy: Bool {
+        switch self {
+        case .authorizing, .exchanging: return true
+        default: return false
+        }
+    }
+
+    public var statusText: String {
+        switch self {
+        case .signedOut:
+            return "Not signed in with Claude."
+        case .authorizing:
+            return "Waiting for Claude sign-in in the browser…"
+        case .exchanging:
+            return "Finishing sign-in…"
+        case let .signedIn(identifier, expiresAt):
+            if let expiresAt {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .short
+                formatter.timeStyle = .short
+                return "Signed in as \(identifier). Access token valid until \(formatter.string(from: expiresAt)); it renews automatically."
+            }
+            return "Signed in as \(identifier)."
+        case let .failed(message):
+            return message
+        }
+    }
+}
+
 @MainActor
 public class AuthManager: ObservableObject {
     public static let shared = AuthManager()
@@ -234,6 +289,7 @@ public class AuthManager: ObservableObject {
     @Published public var antigravityCreds: ServiceCredentials
     @Published public var codexCreds: ServiceCredentials
     @Published public var opencodeGoCreds: ServiceCredentials
+    @Published public var claudeCreds: ServiceCredentials
 
     /// Drives the ChatGPT sign-in button/status in `LoginSheetView`.
     @Published public private(set) var chatGPTAuthState: ChatGPTAuthState = .signedOut
@@ -256,13 +312,27 @@ public class AuthManager: ObservableObject {
     @Published public private(set) var openCodeUsage: OpenCodeUsage?
     @Published public private(set) var openCodeUsageError: String?
 
+    /// Latest Claude subscription usage.
+    @Published public private(set) var claudeUsage: ClaudeUsage?
+    @Published public private(set) var claudeUsageError: String?
+    /// Drives the "Sign in with Claude" button/status in `LoginSheetView`.
+    @Published public private(set) var claudeAuthState: ClaudeAuthState = .signedOut
+    /// Distinguishes the OAuth session from a manually pasted token.
+    @Published public private(set) var claudeAuthMethod: ClaudeAuthMethod = .apiKey
+
+    /// Provider IDs in the order widgets display them.
+    @Published public private(set) var providerOrder: [String]
+
     private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
     private let codexKey = "auth_creds_codex"
     private let opencodeKey = "auth_creds_opencode_go"
+    private let claudeKey = "auth_creds_claude"
+    private let providerOrderKey = "provider_order"
     private let codexMethodKey = "auth_method_codex"
     private let antigravityMethodKey = "auth_method_antigravity"
     private let openCodeMethodKey = "auth_method_opencode"
+    private let claudeMethodKey = "auth_method_claude"
 
     private let chatGPTCredentialStore: any ChatGPTCredentialStoring
     private let chatGPTOAuthNetworking: any ChatGPTOAuthNetworking
@@ -276,6 +346,16 @@ public class AuthManager: ObservableObject {
     private let openCodeOAuthNetworking: any OpenCodeOAuthNetworking
     private let openCodeUsageService: any OpenCodeUsageFetching
     private var openCodeTokens: OpenCodeTokens?
+    private let claudeUsageService: any ClaudeUsageFetching
+    private let claudeCredentialStore: any ClaudeCredentialStoring
+    private let claudeOAuthNetworking: any ClaudeOAuthNetworking
+    private var claudeTokens: ClaudeTokens?
+    /// Coalesces concurrent refreshes: refresh tokens rotate, so a second
+    /// request with the same (now spent) token would come back `invalid_grant`.
+    private var claudeRefreshTask: Task<ClaudeTokens, Error>?
+    private var pendingClaudeManualContext: ClaudeAuthorizationContext?
+
+    public static let defaultProviderOrder = ServiceProviderType.allCases.map(\.rawValue)
 
     public init(
         storage: UserDefaults = .standard,
@@ -286,7 +366,10 @@ public class AuthManager: ObservableObject {
         antigravityOAuthNetworking: any AntigravityOAuthNetworking = URLSessionAntigravityOAuthNetworking(),
         openCodeCredentialStore: any OpenCodeCredentialStoring = KeychainOpenCodeCredentialStore.shared,
         openCodeOAuthNetworking: any OpenCodeOAuthNetworking = URLSessionOpenCodeOAuthNetworking(),
-        openCodeUsageService: any OpenCodeUsageFetching = URLSessionOpenCodeUsageFetcher()
+        openCodeUsageService: any OpenCodeUsageFetching = URLSessionOpenCodeUsageFetcher(),
+        claudeUsageService: any ClaudeUsageFetching = URLSessionClaudeUsageFetcher(),
+        claudeCredentialStore: any ClaudeCredentialStoring = KeychainClaudeCredentialStore.shared,
+        claudeOAuthNetworking: any ClaudeOAuthNetworking = URLSessionClaudeOAuthNetworking()
     ) {
         self.defaults = storage
         self.chatGPTCredentialStore = chatGPTCredentialStore
@@ -297,6 +380,10 @@ public class AuthManager: ObservableObject {
         self.openCodeCredentialStore = openCodeCredentialStore
         self.openCodeOAuthNetworking = openCodeOAuthNetworking
         self.openCodeUsageService = openCodeUsageService
+        self.claudeUsageService = claudeUsageService
+        self.claudeCredentialStore = claudeCredentialStore
+        self.claudeOAuthNetworking = claudeOAuthNetworking
+        self.providerOrder = AuthManager.normalizedOrder(storage.array(forKey: "provider_order") as? [String])
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
@@ -316,6 +403,9 @@ public class AuthManager: ObservableObject {
             isLoggedIn: true,
             lastVerified: Date()
         )
+
+        // Claude has no demo placeholder: it starts disconnected.
+        self.claudeCreds = AuthManager.load(from: storage, key: claudeKey) ?? ServiceCredentials()
 
         // OAuth tokens live only in secure storage. Never let a stale keychain
         // item override an explicitly saved manual API-key login.
@@ -377,15 +467,41 @@ public class AuthManager: ObservableObject {
         } else {
             self.openCodeAuthMethod = storedOpenCodeMethod ?? .apiKey
         }
+
+        // Claude follows the same precedence: an explicitly saved manual token
+        // wins over a stale Keychain grant.
+        let storedClaudeMethod = storage.string(forKey: "auth_method_claude")
+            .flatMap(ClaudeAuthMethod.init(rawValue:))
+        if storedClaudeMethod == .apiKey {
+            self.claudeAuthMethod = .apiKey
+        } else if let storedTokens = try? claudeCredentialStore.load() {
+            self.claudeTokens = storedTokens
+            self.claudeAuthMethod = .oauth
+            self.claudeAuthState = .signedIn(
+                identifier: storedTokens.identifier,
+                expiresAt: storedTokens.expiresAt
+            )
+            self.claudeCreds = ServiceCredentials(
+                apiKey: "",
+                identifier: storedTokens.identifier,
+                isLoggedIn: true,
+                lastVerified: storedTokens.expiresAt ?? Date()
+            )
+        } else {
+            self.claudeAuthMethod = storedClaudeMethod ?? .apiKey
+        }
     }
 
     nonisolated public static func resetDefaults(in storage: UserDefaults = .standard) {
         storage.removeObject(forKey: "auth_creds_antigravity")
         storage.removeObject(forKey: "auth_creds_codex")
         storage.removeObject(forKey: "auth_creds_opencode_go")
+        storage.removeObject(forKey: "auth_creds_claude")
+        storage.removeObject(forKey: "provider_order")
         storage.removeObject(forKey: "auth_method_codex")
         storage.removeObject(forKey: "auth_method_antigravity")
         storage.removeObject(forKey: "auth_method_opencode")
+        storage.removeObject(forKey: "auth_method_claude")
     }
 
     public func credentials(for type: ServiceProviderType) -> ServiceCredentials {
@@ -393,6 +509,7 @@ public class AuthManager: ObservableObject {
         case .antigravity: return antigravityCreds
         case .codex: return codexCreds
         case .opencodeGo: return opencodeGoCreds
+        case .claude: return claudeCreds
         }
     }
 
@@ -436,6 +553,15 @@ public class AuthManager: ObservableObject {
             openCodeTokens = nil
             openCodeAuthState = .signedOut
             setOpenCodeAuthMethod(.apiKey)
+        case .claude:
+            claudeCreds = newCreds
+            save(newCreds, key: claudeKey)
+            // Manual tokens take precedence over a Claude OAuth session. The
+            // Keychain item is left intact but ignored while the method is
+            // `.apiKey`.
+            claudeTokens = nil
+            claudeAuthState = .signedOut
+            setClaudeAuthMethod(.apiKey)
         }
         return true
     }
@@ -455,7 +581,109 @@ public class AuthManager: ObservableObject {
             signOutOpenCode()
             opencodeGoCreds = cleared
             save(cleared, key: opencodeKey)
+        case .claude:
+            signOutClaude()
+            claudeCreds = cleared
+            save(cleared, key: claudeKey)
+            claudeUsage = nil
+            claudeUsageError = nil
+            // Drop the published record so the widget stops showing stale usage.
+            if var snapshot = SharedUsageStore.load() {
+                snapshot.records["claude"] = nil
+                try? SharedUsageStore.save(snapshot)
+                reloadWidgets()
+            }
         }
+    }
+
+    // MARK: - Claude usage
+
+    /// Fetch Claude subscription usage with the saved token and publish it to
+    /// the widget.
+    @discardableResult
+    public func refreshClaudeUsage() async -> Bool {
+        do {
+            let usage = try await fetchClaudeUsage()
+            claudeUsage = usage
+            claudeUsageError = nil
+
+            var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+            snapshot.records["claude"] = UsageSnapshot.Record(
+                id: "claude",
+                usedPercent: Double(usage.usedPercent),
+                detail: usage.detail,
+                status: usage.statusText,
+                hasRequestCount: false,
+                hasUsageData: usage.hasUsageData
+            )
+            snapshot.updatedAt = Date()
+            try? SharedUsageStore.save(snapshot)
+            reloadWidgets()
+            return true
+        } catch {
+            claudeUsageError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Uses the OAuth session when signed in (renewing it as needed, and once
+    /// more after a 401), otherwise the manually pasted token.
+    private func fetchClaudeUsage() async throws -> ClaudeUsage {
+        if claudeAuthMethod == .oauth {
+            let token = try await claudeAccessToken()
+            do {
+                return try await claudeUsageService.fetchUsage(accessToken: token)
+            } catch ClaudeUsageError.http(let status, _) where status == 401 {
+                let refreshed = try await refreshClaudeTokensIfNeeded(force: true)
+                return try await claudeUsageService.fetchUsage(accessToken: refreshed.accessToken)
+            }
+        }
+        guard claudeCreds.isLoggedIn, !claudeCreds.apiKey.isEmpty else {
+            throw ClaudeUsageError.missingToken
+        }
+        return try await claudeUsageService.fetchUsage(accessToken: claudeCreds.apiKey)
+    }
+
+    // MARK: - Provider order
+
+    /// Moves `id` one slot toward the front (`offset < 0`) or back (`offset > 0`).
+    public func moveProvider(_ id: String, by offset: Int) {
+        guard let index = providerOrder.firstIndex(of: id) else { return }
+        let target = index + offset
+        guard providerOrder.indices.contains(target) else { return }
+        var order = providerOrder
+        order.swapAt(index, target)
+        setProviderOrder(order)
+    }
+
+    public func resetProviderOrder() {
+        setProviderOrder(Self.defaultProviderOrder)
+    }
+
+    private func setProviderOrder(_ order: [String]) {
+        providerOrder = order
+        defaults.set(order, forKey: providerOrderKey)
+        // The widget cannot read UserDefaults, so ship the order in the snapshot.
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        snapshot.providerOrder = order
+        try? SharedUsageStore.save(snapshot)
+        reloadWidgets()
+    }
+
+    /// Drops unknown IDs and appends any provider missing from a stored order,
+    /// so adding a provider in an update never hides it.
+    static func normalizedOrder(_ stored: [String]?) -> [String] {
+        var seen = Set<String>()
+        var order = (stored ?? []).filter { defaultProviderOrder.contains($0) && seen.insert($0).inserted }
+        order.append(contentsOf: defaultProviderOrder.filter { !seen.contains($0) })
+        return order
+    }
+
+    private func reloadWidgets() {
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        #endif
     }
 
     // MARK: - Antigravity Google OAuth
@@ -733,6 +961,177 @@ public class AuthManager: ObservableObject {
     private func setCodexAuthMethod(_ method: ChatGPTAuthMethod) {
         codexAuthMethod = method
         defaults.set(method.rawValue, forKey: codexMethodKey)
+    }
+
+    // MARK: - Claude OAuth
+
+    /// Runs the Authorization Code + PKCE flow (loopback redirect) through the
+    /// supplied client. On success the tokens are stored in the Keychain and the
+    /// account email becomes the Claude provider identifier.
+    @discardableResult
+    public func signInWithClaude(using client: ClaudeOAuthClient) async -> Bool {
+        guard !claudeAuthState.isBusy else { return false }
+
+        claudeAuthState = .authorizing
+        do {
+            let tokens = try await client.authorize()
+            return try finishClaudeSignIn(tokens)
+        } catch is CancellationError {
+            claudeAuthState = .failed(ClaudeOAuthError.cancelled.userMessage)
+            return false
+        } catch let error as ClaudeOAuthError {
+            claudeAuthState = .failed(error.userMessage)
+            return false
+        } catch {
+            claudeAuthState = .failed("Sign-in failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Paste-the-code variant, step 1: returns the page to open. Claude displays
+    /// a `code#state` string there; `completeClaudeManualSignIn` redeems it.
+    public func beginClaudeManualSignIn(
+        configuration: ClaudeOAuthConfiguration = .defaultConfiguration()
+    ) throws -> URL {
+        let context = ClaudeAuthorizationContext(configuration: configuration)
+        let url = try context.manualAuthorizationURL()
+        pendingClaudeManualContext = context
+        claudeAuthState = .authorizing
+        return url
+    }
+
+    /// Paste-the-code variant, step 2.
+    @discardableResult
+    public func completeClaudeManualSignIn(pastedCode: String, using client: ClaudeOAuthClient) async -> Bool {
+        guard let context = pendingClaudeManualContext else {
+            claudeAuthState = .failed("Start sign-in first, then paste the code.")
+            return false
+        }
+        do {
+            let tokens = try await client.authorizeManually(pasted: pastedCode, context: context)
+            pendingClaudeManualContext = nil
+            return try finishClaudeSignIn(tokens)
+        } catch let error as ClaudeOAuthError {
+            // A bad paste or stale code leaves the pending request intact so the
+            // user can retry; the page's code is single-use, so exchange failures
+            // need a fresh `beginClaudeManualSignIn`.
+            if case .invalidPastedCode = error {} else { pendingClaudeManualContext = nil }
+            claudeAuthState = .failed(error.userMessage)
+            return false
+        } catch {
+            pendingClaudeManualContext = nil
+            claudeAuthState = .failed("Sign-in failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func finishClaudeSignIn(_ tokens: ClaudeTokens) throws -> Bool {
+        claudeAuthState = .exchanging
+        try claudeCredentialStore.save(tokens)
+        applyClaudeTokens(tokens)
+        return true
+    }
+
+    /// Returns a usable access token, refreshing it when it is within the
+    /// 60-second expiry skew. Throws `.notSignedIn` when no OAuth session exists.
+    public func claudeAccessToken(now: Date = Date()) async throws -> String {
+        try await refreshClaudeTokensIfNeeded(now: now).accessToken
+    }
+
+    /// Refreshes the OAuth grant if required. The rotated refresh token is saved
+    /// to the Keychain *before* the new access token is used or published, and a
+    /// rejected refresh token signs the user out.
+    @discardableResult
+    public func refreshClaudeTokensIfNeeded(now: Date = Date(), force: Bool = false) async throws -> ClaudeTokens {
+        let current: ClaudeTokens
+        if let tokens = claudeTokens {
+            current = tokens
+        } else if claudeAuthMethod == .oauth, let stored = try claudeCredentialStore.load() {
+            current = stored
+            claudeTokens = stored
+        } else {
+            throw ClaudeOAuthError.notSignedIn
+        }
+
+        if !force, !current.isExpired(at: now) {
+            return current
+        }
+        guard let refreshToken = current.refreshToken, !refreshToken.isEmpty else {
+            throw ClaudeOAuthError.missingRefreshToken
+        }
+
+        if let inFlight = claudeRefreshTask {
+            return try await inFlight.value
+        }
+
+        let networking = claudeOAuthNetworking
+        let store = claudeCredentialStore
+        let task = Task { @MainActor () throws -> ClaudeTokens in
+            let response = try await networking.refreshToken(
+                ClaudeOAuthRefreshRequest(configuration: .defaultConfiguration(), refreshToken: refreshToken)
+            )
+            let refreshed = try ClaudeTokens(response: response, previous: current, now: now)
+            // Persist the rotated refresh token first: the old one is already spent.
+            try store.save(refreshed)
+            return refreshed
+        }
+        claudeRefreshTask = task
+        defer { claudeRefreshTask = nil }
+
+        do {
+            let refreshed = try await task.value
+            applyClaudeTokens(refreshed)
+            return refreshed
+        } catch let error as ClaudeOAuthError {
+            if case .invalidGrant = error {
+                clearClaudeSession()
+            } else {
+                claudeAuthState = .failed(error.userMessage)
+            }
+            throw error
+        }
+    }
+
+    /// Clears the OAuth session and its Keychain item. A manual token is
+    /// cleared separately by `logout(type: .claude)`.
+    public func signOutClaude() {
+        claudeRefreshTask?.cancel()
+        claudeRefreshTask = nil
+        pendingClaudeManualContext = nil
+        claudeTokens = nil
+        try? claudeCredentialStore.delete()
+        claudeAuthState = .signedOut
+        if claudeAuthMethod == .oauth {
+            setClaudeAuthMethod(.apiKey)
+        }
+    }
+
+    private func applyClaudeTokens(_ tokens: ClaudeTokens) {
+        claudeTokens = tokens
+        setClaudeAuthMethod(.oauth)
+        claudeCreds = ServiceCredentials(
+            apiKey: "",
+            identifier: tokens.identifier,
+            isLoggedIn: true,
+            lastVerified: tokens.expiresAt ?? Date()
+        )
+        save(claudeCreds, key: claudeKey)
+        claudeAuthState = .signedIn(identifier: tokens.identifier, expiresAt: tokens.expiresAt)
+    }
+
+    private func clearClaudeSession() {
+        claudeTokens = nil
+        try? claudeCredentialStore.delete()
+        setClaudeAuthMethod(.apiKey)
+        claudeAuthState = .signedOut
+        let cleared = ServiceCredentials(apiKey: "", identifier: "", isLoggedIn: false, lastVerified: nil)
+        claudeCreds = cleared
+        save(cleared, key: claudeKey)
+    }
+
+    private func setClaudeAuthMethod(_ method: ClaudeAuthMethod) {
+        claudeAuthMethod = method
+        defaults.set(method.rawValue, forKey: claudeMethodKey)
     }
 
     // MARK: - OpenCode OAuth (device grant)

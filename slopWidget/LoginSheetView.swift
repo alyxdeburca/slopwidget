@@ -3,6 +3,7 @@ import SwiftUI
 public struct LoginSheetView: View {
     @ObservedObject public var authManager = AuthManager.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     @State private var selectedTab: ServiceProviderType = .antigravity
     @State private var apiKeyInput: String = ""
@@ -14,10 +15,14 @@ public struct LoginSheetView: View {
     @State private var isSigningInWithGoogle: Bool = false
     @State private var isSigningInOpenCode: Bool = false
     @State private var openCodeLoginTask: Task<Void, Never>?
+    @State private var isSigningInClaude: Bool = false
+    @State private var showingClaudePaste: Bool = false
+    @State private var claudePastedCode: String = ""
 
     private let oauthClientFactory: @MainActor () -> ChatGPTOAuthClient
     private let googleOAuthClientFactory: @MainActor () -> AntigravityOAuthClient
     private let openCodeOAuthClientFactory: @MainActor () -> OpenCodeOAuthClient
+    private let claudeOAuthClientFactory: @MainActor () -> ClaudeOAuthClient
 
     public init(
         oauthClientFactory: @escaping @MainActor () -> ChatGPTOAuthClient = {
@@ -28,11 +33,15 @@ public struct LoginSheetView: View {
         },
         openCodeOAuthClientFactory: @escaping @MainActor () -> OpenCodeOAuthClient = {
             OpenCodeOAuthClientFactory.makeDefault()
+        },
+        claudeOAuthClientFactory: @escaping @MainActor () -> ClaudeOAuthClient = {
+            ClaudeOAuthClientFactory.makeDefault()
         }
     ) {
         self.oauthClientFactory = oauthClientFactory
         self.googleOAuthClientFactory = googleOAuthClientFactory
         self.openCodeOAuthClientFactory = openCodeOAuthClientFactory
+        self.claudeOAuthClientFactory = claudeOAuthClientFactory
     }
 
     public var body: some View {
@@ -281,6 +290,90 @@ public struct LoginSheetView: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        if selectedTab == .claude {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Claude Account")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+
+                                Button {
+                                    performClaudeLogin()
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        if isSigningInClaude {
+                                            ProgressView()
+                                                .tint(.white)
+                                        } else {
+                                            Image(systemName: "person.crop.circle.badge.checkmark")
+                                        }
+                                        Text(isSigningInClaude ? "Signing in…" : "Sign in with Claude")
+                                    }
+                                    .font(.subheadline.bold())
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(ServiceProviderType.claude.brandColor, in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                .disabled(isSigningInClaude || authManager.claudeAuthState.isBusy)
+
+                                HStack(alignment: .top, spacing: 6) {
+                                    Image(systemName: claudeStatusIcon)
+                                        .font(.caption2)
+                                        .foregroundColor(claudeStatusColor)
+                                    Text(authManager.claudeAuthState.statusText)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                DisclosureGroup("Browser can't return to the app? Paste a code", isExpanded: $showingClaudePaste) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Button("1. Open Claude sign-in page") {
+                                            beginClaudeManualLogin()
+                                        }
+                                        .font(.caption.bold())
+                                        TextField("2. Paste the code shown (code#state)", text: $claudePastedCode)
+                                            .textInputAutocapitalization(.never)
+                                            .autocorrectionDisabled()
+                                            .padding(10)
+                                            .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                                        Button("3. Submit code") {
+                                            submitClaudePastedCode()
+                                        }
+                                        .font(.caption.bold())
+                                        .disabled(claudePastedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    }
+                                    .padding(.top, 6)
+                                }
+                                .font(.caption)
+
+                                if authManager.claudeAuthMethod == .oauth && authManager.claudeCreds.isLoggedIn {
+                                    Button {
+                                        authManager.logout(type: .claude)
+                                        apiKeyInput = ""
+                                        identifierInput = ""
+                                        statusMessage = "Signed out of Claude."
+                                        isSuccess = false
+                                    } label: {
+                                        Text("Sign out of Claude")
+                                            .font(.caption.bold())
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                            }
+
+                            Divider()
+
+                            Text("Manual token (fallback)")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+
+                            Text("Paste a Claude Code OAuth access token with the user:profile scope. Usage comes from Anthropic's undocumented /api/oauth/usage endpoint, which may change. API keys (sk-ant-api…) are not accepted by it.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
                         // Input fields
                         VStack(alignment: .leading, spacing: 12) {
                             Text("API Key / Token")
@@ -449,6 +542,24 @@ public struct LoginSheetView: View {
         }
     }
 
+    private var claudeStatusIcon: String {
+        switch authManager.claudeAuthState {
+        case .signedOut: return "circle"
+        case .authorizing, .exchanging: return "arrow.triangle.2.circlepath"
+        case .signedIn: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var claudeStatusColor: Color {
+        switch authManager.claudeAuthState {
+        case .signedOut: return .secondary
+        case .authorizing, .exchanging: return .orange
+        case .signedIn: return .green
+        case .failed: return .orange
+        }
+    }
+
     private var googleStatusIcon: String {
         switch authManager.antigravityAuthState {
         case .signedOut: return "circle"
@@ -563,6 +674,54 @@ public struct LoginSheetView: View {
         }
     }
 
+    private func performClaudeLogin() {
+        guard !isSigningInClaude else { return }
+        isSigningInClaude = true
+        statusMessage = nil
+        isSuccess = false
+
+        Task { @MainActor in
+            let client = claudeOAuthClientFactory()
+            let success = await authManager.signInWithClaude(using: client)
+            isSigningInClaude = false
+            reportClaudeSignIn(success)
+        }
+    }
+
+    private func beginClaudeManualLogin() {
+        do {
+            openURL(try authManager.beginClaudeManualSignIn())
+        } catch {
+            statusMessage = error.localizedDescription
+            isSuccess = false
+        }
+    }
+
+    private func submitClaudePastedCode() {
+        let pasted = claudePastedCode
+        Task { @MainActor in
+            let success = await authManager.completeClaudeManualSignIn(
+                pastedCode: pasted,
+                using: claudeOAuthClientFactory()
+            )
+            if success { claudePastedCode = "" }
+            reportClaudeSignIn(success)
+        }
+    }
+
+    private func reportClaudeSignIn(_ success: Bool) {
+        if success {
+            let creds = authManager.credentials(for: .claude)
+            apiKeyInput = ""
+            identifierInput = creds.identifier
+            statusMessage = "Signed in with Claude as \(creds.identifier)."
+            isSuccess = true
+        } else {
+            statusMessage = authManager.claudeAuthState.statusText
+            isSuccess = false
+        }
+    }
+
     private func performLogin() {
         if apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             statusMessage = "Please provide a valid API key or token."
@@ -590,6 +749,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "Antigravity Cloud & Gemini Agent Platform"
         case .codex: return "OpenAI Codex & API Workspaces"
         case .opencodeGo: return "OpenCode Developer Network & Cloud Endpoints"
+        case .claude: return "Claude subscription limits (5-hour and weekly)"
         }
     }
 
@@ -598,6 +758,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "Account Email (optional)"
         case .codex: return "Organization ID (optional)"
         case .opencodeGo: return "Server Endpoint URL (optional)"
+        case .claude: return "Account Label (optional)"
         }
     }
 
@@ -606,6 +767,7 @@ public struct LoginSheetView: View {
         case .antigravity: return "user@example.com"
         case .codex: return "org-12345678"
         case .opencodeGo: return "https://api.opencode.dev"
+        case .claude: return "you@example.com"
         }
     }
 }
