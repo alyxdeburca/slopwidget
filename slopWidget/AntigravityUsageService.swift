@@ -87,6 +87,15 @@ public struct AntigravityUsage: Decodable, Sendable, Equatable {
             date = formatter.date(from: raw)
         }
         guard let date else { return "Resets \(raw)" }
+        let interval = date.timeIntervalSince(Date())
+        if interval > 0 && interval < 24 * 3600 {
+            let hours = Int(interval) / 3600
+            let minutes = (Int(interval) % 3600) / 60
+            if hours > 0 {
+                return "Resets in \(hours)h \(minutes)m"
+            }
+            return "Resets in \(minutes)m"
+        }
         let out = DateFormatter()
         out.dateStyle = .short
         out.timeStyle = .short

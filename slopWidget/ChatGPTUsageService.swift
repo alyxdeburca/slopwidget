@@ -108,6 +108,15 @@ public struct ChatGPTUsage: Codable, Sendable, Equatable {
     public var resetText: String? {
         guard let resetAt = displayWindow?.resetAt else { return nil }
         let date = Date(timeIntervalSince1970: TimeInterval(resetAt))
+        let interval = date.timeIntervalSince(Date())
+        if interval > 0 && interval < 24 * 3600 {
+            let hours = Int(interval) / 3600
+            let minutes = (Int(interval) % 3600) / 60
+            if hours > 0 {
+                return "Resets in \(hours)h \(minutes)m"
+            }
+            return "Resets in \(minutes)m"
+        }
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
