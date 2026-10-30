@@ -684,17 +684,7 @@ public class AuthManager: ObservableObject {
             antigravityUsage = usage
             antigravityUsageError = nil
 
-            var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
-            snapshot.records["antigravity"] = UsageSnapshot.Record(
-                id: "antigravity",
-                usedPercent: Double(usage.usedPercent),
-                detail: usage.detail,
-                status: usage.statusText,
-                hasRequestCount: false,
-                hasUsageData: usage.hasUsageData,
-                resetText: usage.resetText
-            )
-            snapshot.updatedAt = Date()
+            let snapshot = Self.snapshot(merging: usage, into: SharedUsageStore.load() ?? UsageSnapshot())
             try? SharedUsageStore.save(snapshot)
             reloadWidgets()
             return true
@@ -702,6 +692,59 @@ public class AuthManager: ObservableObject {
             antigravityUsageError = error.localizedDescription
             return false
         }
+    }
+
+    /// Returns `snapshot` with the Codex record and windows replaced by `usage`.
+    /// The user's tap selection is kept (nil until the first tap, which means
+    /// "show the default window": weekly when reported); only the figures change.
+    nonisolated static func snapshot(merging usage: ChatGPTUsage, into snapshot: UsageSnapshot) -> UsageSnapshot {
+        var snapshot = snapshot
+        snapshot.setWindowMeters(usage.windowMeters, for: "codex")
+        var usedPercent = Double(usage.usedPercent)
+        var detail = usage.planLabel
+        var resetText = usage.resetText
+        if let window = snapshot.displayedWindow(for: "codex") {
+            usedPercent = window.percent.rounded()
+            detail = window.label
+            resetText = window.resetText
+        }
+        snapshot.records["codex"] = UsageSnapshot.Record(
+            id: "codex",
+            usedPercent: usedPercent,
+            detail: detail,
+            status: usage.statusText,
+            hasRequestCount: false,
+            resetText: resetText
+        )
+        snapshot.updatedAt = Date()
+        return snapshot
+    }
+
+    /// Returns `snapshot` with the Antigravity record and windows replaced by
+    /// `usage`. The user's tap selection is kept (nil until the first tap,
+    /// which means "show the most constrained bucket").
+    nonisolated static func snapshot(merging usage: AntigravityUsage, into snapshot: UsageSnapshot) -> UsageSnapshot {
+        var snapshot = snapshot
+        snapshot.setWindowMeters(usage.windowMeters, for: "antigravity")
+        var usedPercent = Double(usage.usedPercent)
+        var detail = usage.detail
+        var resetText = usage.resetText
+        if let window = snapshot.displayedWindow(for: "antigravity") {
+            usedPercent = window.percent.rounded()
+            detail = window.label
+            resetText = window.resetText
+        }
+        snapshot.records["antigravity"] = UsageSnapshot.Record(
+            id: "antigravity",
+            usedPercent: usedPercent,
+            detail: detail,
+            status: usage.statusText,
+            hasRequestCount: false,
+            hasUsageData: usage.hasUsageData,
+            resetText: resetText
+        )
+        snapshot.updatedAt = Date()
+        return snapshot
     }
 
     private func fetchAntigravityUsage() async throws -> AntigravityUsage {
@@ -926,16 +969,7 @@ public class AuthManager: ObservableObject {
             let usage = try await chatGPTUsageService.fetchUsage(tokens: tokens)
             chatGPTUsage = usage
             chatGPTUsageError = nil
-            var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
-            snapshot.records["codex"] = UsageSnapshot.Record(
-                id: "codex",
-                usedPercent: Double(usage.usedPercent),
-                detail: usage.planLabel,
-                status: usage.statusText,
-                hasRequestCount: false,
-                resetText: usage.resetText
-            )
-            snapshot.updatedAt = Date()
+            let snapshot = Self.snapshot(merging: usage, into: SharedUsageStore.load() ?? UsageSnapshot())
             try? SharedUsageStore.save(snapshot)
             #if canImport(WidgetKit)
             WidgetCenter.shared.reloadAllTimelines()
@@ -1268,6 +1302,16 @@ public class AuthManager: ObservableObject {
               let next = meters.nextWindow(after: snapshot.claudeMeterSelection) else { return }
         snapshot.claudeMeterSelection = next
         UserDefaults.standard.set(next, forKey: "claudeMeterSelection")
+        try? SharedUsageStore.save(snapshot)
+        reloadWidgets()
+    }
+
+    /// Cycles `provider` ("codex" or "antigravity") to its next usage window.
+    /// Until the first call the default window is shown, so the first call
+    /// moves to the next one. Mirrors the widget's tap intent.
+    public func cycleWindow(for provider: String) {
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        guard snapshot.cycleWindow(for: provider) != nil else { return }
         try? SharedUsageStore.save(snapshot)
         reloadWidgets()
     }

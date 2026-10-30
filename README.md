@@ -20,8 +20,15 @@ Built with SwiftUI + WidgetKit, cross-compiled on Linux with
 - **Interactive widget taps**: tapping the OpenCode Go percentage cycles the
   displayed window (rolling → weekly → monthly) **inline**, without launching
   the app.
-- **Claude tap-to-cycle**: tapping the Claude percentage switches between the
-  5-hour and weekly windows (the most constrained one is shown until you tap).
+- **Tap-to-cycle for every provider**: tapping a provider's percentage on the
+  widget switches which usage window it shows, in place:
+  - **OpenCode Go**: rolling → weekly → monthly.
+  - **Claude**: 5-hour ↔ weekly (the most constrained one is shown until you tap).
+  - **Codex**: 5-hour ↔ weekly (weekly is shown until you tap).
+  - **Antigravity**: each quota bucket in turn (the most constrained is shown
+    until you tap).
+
+  The window name appears next to the percentage when it fits.
 - **Real usage data only**: no fabricated request counts. Providers that don't
   report a quota (such as Antigravity) show `—` and are excluded from the
   average, instead of a misleading `100/100`.
@@ -66,8 +73,8 @@ endpoint configuration, all in one sheet.
 |---|---|
 | ![Widget 1x3](assets/screenshots/widget_1x3.png) | ![Widget 2x2](assets/screenshots/widget_2x2.png) |
 
-Tapping the OpenCode Go percentage on any widget cycles its window
-(rolling → weekly → monthly) in place.
+Tapping any provider's percentage on a small or medium widget cycles its
+usage window in place (see "Tap-to-cycle for every provider" above).
 
 ## Project structure
 
@@ -89,8 +96,9 @@ Tapping the OpenCode Go percentage on any widget cycles its window
     per-provider OAuth/device flows and Keychain storage.
   - `ChatGPTUsageService.swift`, `OpenCodeUsageService.swift`: Usage fetch
     clients (OpenCode uses the private `/zen/go/v1/usage` endpoint).
-  - `CycleOpenCodeMeterIntent.swift`: AppIntent that cycles the OpenCode window
-    (kept alive at link time so widget taps resolve).
+  - `Cycle*MeterIntent.swift`: one AppIntent per provider that cycles its
+    usage window (kept alive by `slopWidgetApp.widgetIntents` so widget taps
+    resolve). Codex and Antigravity share `UsageSnapshot.WindowMeters`.
   - `UsageSnapshot.swift`: Shared snapshot model published to the widget.
 - **[slopWidgetExtension/](slopWidgetExtension/)**: WidgetKit extension.
   - `slopWidgetExtension.swift`: Widget bundle, timeline provider, views for
@@ -164,7 +172,7 @@ xtool dev run -u <DEVICE_UDID> --usb
 ```
 `xtool` builds the app and widget extension, signs them with your Apple ID
 certificate, and installs them. Regenerate the App Intents metadata first if you
-changed `CycleOpenCodeMeterIntent.swift`:
+added or changed a `Cycle*MeterIntent.swift`:
 ```bash
 ./scripts/update-appintents-metadata.sh
 ```

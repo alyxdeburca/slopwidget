@@ -16,6 +16,25 @@ public struct ChatGPTUsage: Codable, Sendable, Equatable {
             case limitWindowSeconds = "limit_window_seconds"
             case resetAt = "reset_at"
         }
+
+        /// Human-readable reset time for this window, if available.
+        public var resetText: String? {
+            guard let resetAt else { return nil }
+            let date = Date(timeIntervalSince1970: TimeInterval(resetAt))
+            let interval = date.timeIntervalSince(Date())
+            if interval > 0 && interval < 24 * 3600 {
+                let hours = Int(interval) / 3600
+                let minutes = (Int(interval) % 3600) / 60
+                if hours > 0 {
+                    return "Resets in \(hours)h \(minutes)m"
+                }
+                return "Resets in \(minutes)m"
+            }
+            let formatter = DateFormatter()
+            formatter.dateStyle = .short
+            formatter.timeStyle = .short
+            return "Resets \(formatter.string(from: date))"
+        }
     }
 
     public var email: String?
@@ -106,21 +125,42 @@ public struct ChatGPTUsage: Codable, Sendable, Equatable {
 
     /// Human-readable reset time for the displayed window, if available.
     public var resetText: String? {
-        guard let resetAt = displayWindow?.resetAt else { return nil }
-        let date = Date(timeIntervalSince1970: TimeInterval(resetAt))
-        let interval = date.timeIntervalSince(Date())
-        if interval > 0 && interval < 24 * 3600 {
-            let hours = Int(interval) / 3600
-            let minutes = (Int(interval) % 3600) / 60
-            if hours > 0 {
-                return "Resets in \(hours)h \(minutes)m"
-            }
-            return "Resets in \(minutes)m"
+        displayWindow?.resetText
+    }
+
+    /// Short label for a window length, e.g. 18000 -> "5-hour", 604800 -> "Weekly".
+    public static func windowLabel(seconds: Int?) -> String {
+        guard let seconds, seconds > 0 else { return "Window" }
+        if seconds == 604_800 { return "Weekly" }
+        if seconds == 86_400 { return "Daily" }
+        if seconds % 86_400 == 0 { return "\(seconds / 86_400)-day" }
+        if seconds % 3_600 == 0 { return "\(seconds / 3_600)-hour" }
+        return "\(max(1, seconds / 60))-min"
+    }
+
+    /// Every reported window, shortest first, for the widget's tap-to-cycle.
+    /// Before the first tap the widget shows `displayWindow` (weekly when
+    /// reported), so that is the default.
+    public var windowMeters: UsageSnapshot.WindowMeters? {
+        var entries: [(id: String, window: Window)] = []
+        if let primaryWindow, primaryWindow.usedPercent != nil { entries.append(("primary", primaryWindow)) }
+        if let secondaryWindow, secondaryWindow.usedPercent != nil { entries.append(("secondary", secondaryWindow)) }
+        guard !entries.isEmpty else { return nil }
+        let ordered = entries.enumerated().sorted { lhs, rhs in
+            let l = lhs.element.window.limitWindowSeconds ?? Int.max
+            let r = rhs.element.window.limitWindowSeconds ?? Int.max
+            return l == r ? lhs.offset < rhs.offset : l < r
+        }.map(\.element)
+        let windows = ordered.map { entry in
+            UsageSnapshot.WindowMeters.Window(
+                id: entry.id,
+                label: Self.windowLabel(seconds: entry.window.limitWindowSeconds),
+                percent: min(100, max(0, entry.window.usedPercent ?? 0)),
+                resetText: entry.window.resetText
+            )
         }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return "Resets \(formatter.string(from: date))"
+        let defaultID = displayWindow.flatMap { shown in ordered.first { $0.window == shown }?.id }
+        return UsageSnapshot.WindowMeters(windows: windows, defaultID: defaultID)
     }
 
     public var providerUsageItem: ProviderUsageItem {
