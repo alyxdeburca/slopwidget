@@ -560,6 +560,8 @@ public struct ContentView: View {
                     .padding(.vertical, 20)
                     .background(Color(.systemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
 
+                    refreshSection
+
                     providerOrderSection
 
                     // Adjust Values
@@ -631,7 +633,17 @@ public struct ContentView: View {
                 }
             }
             .task {
+                authManager.publishRefreshSetting()
                 await refreshUsage()
+            }
+            // While the app is open, refresh on the chosen interval. The task
+            // restarts (and its sleep restarts) whenever the interval changes.
+            .task(id: authManager.refreshMinutes) {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(Double(authManager.refreshMinutes) * 60))
+                    if Task.isCancelled { break }
+                    await refreshUsage()
+                }
             }
             .onChange(of: authManager.chatGPTUsage) { _, usage in
                 guard let usage else { return }
@@ -712,6 +724,32 @@ public struct ContentView: View {
                 replaceProvider(with: usage.providerUsageItem)
             }
         }
+    }
+
+    // MARK: Refresh interval
+
+    private var refreshSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Refresh")
+                .font(.headline)
+            Picker("Refresh every", selection: Binding(
+                get: { authManager.refreshMinutes },
+                set: { minutes in
+                    authManager.setRefreshMinutes(minutes)
+                    BackgroundRefresh.schedule(after: TimeInterval(authManager.refreshMinutes * 60))
+                }
+            )) {
+                ForEach(RefreshInterval.allowedMinutes, id: \.self) { minutes in
+                    Text(RefreshInterval.label(forMinutes: minutes)).tag(minutes)
+                }
+            }
+            .pickerStyle(.segmented)
+            Text("How often usage refreshes while the app is open, and how often the widget reloads. When the app is closed iOS decides when background refreshes run (it may be less often than this), so open the app or tap Refresh Widget for fresh numbers right now.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
     }
 
     // MARK: Widget order

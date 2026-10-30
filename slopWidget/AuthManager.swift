@@ -325,12 +325,17 @@ public class AuthManager: ObservableObject {
     /// Provider IDs in the order widgets display them.
     @Published public private(set) var providerOrder: [String]
 
+    /// How often, in minutes, usage is refreshed and the widget reloads. Always
+    /// one of `RefreshInterval.allowedMinutes`.
+    @Published public private(set) var refreshMinutes: Int
+
     private let defaults: UserDefaults
     private let agKey = "auth_creds_antigravity"
     private let codexKey = "auth_creds_codex"
     private let opencodeKey = "auth_creds_opencode_go"
     private let claudeKey = "auth_creds_claude"
     private let providerOrderKey = "provider_order"
+    private let refreshMinutesKey = "refresh_minutes"
     private let codexMethodKey = "auth_method_codex"
     private let antigravityMethodKey = "auth_method_antigravity"
     private let openCodeMethodKey = "auth_method_opencode"
@@ -389,6 +394,7 @@ public class AuthManager: ObservableObject {
         self.claudeCredentialStore = claudeCredentialStore
         self.claudeOAuthNetworking = claudeOAuthNetworking
         self.providerOrder = AuthManager.normalizedOrder(storage.array(forKey: "provider_order") as? [String])
+        self.refreshMinutes = RefreshInterval.normalized(storage.object(forKey: "refresh_minutes") as? Int)
         // Load stored credentials or pre-populate defaults
         self.antigravityCreds = AuthManager.load(from: storage, key: agKey) ?? ServiceCredentials(
             apiKey: "ag_demo_74892304",
@@ -503,6 +509,7 @@ public class AuthManager: ObservableObject {
         storage.removeObject(forKey: "auth_creds_opencode_go")
         storage.removeObject(forKey: "auth_creds_claude")
         storage.removeObject(forKey: "provider_order")
+        storage.removeObject(forKey: "refresh_minutes")
         storage.removeObject(forKey: "auth_method_codex")
         storage.removeObject(forKey: "auth_method_antigravity")
         storage.removeObject(forKey: "auth_method_opencode")
@@ -757,6 +764,55 @@ public class AuthManager: ObservableObject {
             throw AntigravityUsageError.missingToken
         }
         return try await antigravityUsageService.fetchUsage(accessToken: token, projectID: nil)
+    }
+
+    // MARK: - Refresh interval
+
+    /// Sets how often usage refreshes and the widget reloads. Values outside
+    /// `RefreshInterval.allowedMinutes` snap to the nearest allowed one. The
+    /// widget cannot read UserDefaults, so the choice is also written to the
+    /// shared snapshot. (Rescheduling the background refresh is the caller's job.)
+    public func setRefreshMinutes(_ minutes: Int) {
+        let normalized = RefreshInterval.normalized(minutes)
+        guard normalized != refreshMinutes else { return }
+        refreshMinutes = normalized
+        defaults.set(normalized, forKey: refreshMinutesKey)
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        snapshot.refreshMinutes = normalized
+        try? SharedUsageStore.save(snapshot)
+        reloadWidgets()
+    }
+
+    /// Makes sure the shared snapshot carries the chosen interval, so the widget
+    /// honors it even if the snapshot was lost since it was chosen. Idempotent.
+    public func publishRefreshSetting() {
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        guard snapshot.refreshMinutes != refreshMinutes else { return }
+        snapshot.refreshMinutes = refreshMinutes
+        try? SharedUsageStore.save(snapshot)
+    }
+
+    /// Refreshes every connected provider and reloads the widget. Used by the
+    /// timed and background refreshes, so it mirrors what opening the app does.
+    @discardableResult
+    public func refreshAllUsage() async -> Bool {
+        publishRefreshSetting()
+        var results: [Bool] = []
+        if codexAuthMethod == .chatGPT {
+            results.append(await refreshChatGPTUsage())
+        }
+        if openCodeAuthMethod == .oauth {
+            results.append(await refreshOpenCodeUsage())
+        }
+        if claudeCreds.isLoggedIn {
+            results.append(await refreshClaudeUsage())
+        }
+        if antigravityAuthMethod == .google || antigravityCreds.isLoggedIn {
+            results.append(await refreshAntigravityUsage())
+        }
+        reloadWidgets()
+        // Nothing to refresh counts as success so iOS does not penalize the task.
+        return results.allSatisfy { $0 }
     }
 
     // MARK: - Provider order
