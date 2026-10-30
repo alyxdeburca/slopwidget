@@ -619,6 +619,10 @@ public struct ContentView: View {
                     authManager.cycleOpenCodeMeter()
                 } else if url.scheme == "slopwidget", url.host == "cycle-claude" {
                     authManager.cycleClaudeMeter()
+                } else if url.scheme == "slopwidget", url.host == "cycle-codex" {
+                    authManager.cycleWindow(for: "codex")
+                } else if url.scheme == "slopwidget", url.host == "cycle-antigravity" {
+                    authManager.cycleWindow(for: "antigravity")
                 }
             }
             .onAppear {

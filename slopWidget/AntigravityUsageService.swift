@@ -28,6 +28,38 @@ public struct AntigravityUsage: Decodable, Sendable, Equatable {
             case resetTime = "resetTime"
             case disabled
         }
+
+        /// Percent of this bucket used, 0...100. nil without a remaining fraction.
+        public var usedPercent: Double? {
+            guard let remainingFraction else { return nil }
+            return min(100, max(0, ((1.0 - remainingFraction) * 100.0).rounded()))
+        }
+
+        /// Human-readable reset time for this bucket, if available.
+        public var resetText: String? {
+            guard let raw = resetTime else { return nil }
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            var date = formatter.date(from: raw)
+            if date == nil {
+                formatter.formatOptions = [.withInternetDateTime]
+                date = formatter.date(from: raw)
+            }
+            guard let date else { return "Resets \(raw)" }
+            let interval = date.timeIntervalSince(Date())
+            if interval > 0 && interval < 24 * 3600 {
+                let hours = Int(interval) / 3600
+                let minutes = (Int(interval) % 3600) / 60
+                if hours > 0 {
+                    return "Resets in \(hours)h \(minutes)m"
+                }
+                return "Resets in \(minutes)m"
+            }
+            let out = DateFormatter()
+            out.dateStyle = .short
+            out.timeStyle = .short
+            return "Resets \(out.string(from: date))"
+        }
     }
 
     public struct Group: Decodable, Sendable, Equatable {
@@ -78,28 +110,44 @@ public struct AntigravityUsage: Decodable, Sendable, Equatable {
     }
 
     public var resetText: String? {
-        guard let raw = displayBucket?.resetTime else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var date = formatter.date(from: raw)
-        if date == nil {
-            formatter.formatOptions = [.withInternetDateTime]
-            date = formatter.date(from: raw)
+        displayBucket?.resetText
+    }
+
+    /// Every enabled bucket with data, in response order, for the widget's
+    /// tap-to-cycle. Before the first tap the widget shows `displayBucket`
+    /// (the most constrained), so that is the default.
+    public var windowMeters: UsageSnapshot.WindowMeters? {
+        let enabled = allBuckets.filter { !($0.disabled ?? false) && $0.remainingFraction != nil }
+        let candidates = enabled.isEmpty ? allBuckets.filter { $0.remainingFraction != nil } : enabled
+        guard !candidates.isEmpty else { return nil }
+
+        let baseLabels = candidates.enumerated().map { index, bucket in
+            bucket.displayName ?? bucket.window ?? bucket.bucketId ?? "Quota \(index + 1)"
         }
-        guard let date else { return "Resets \(raw)" }
-        let interval = date.timeIntervalSince(Date())
-        if interval > 0 && interval < 24 * 3600 {
-            let hours = Int(interval) / 3600
-            let minutes = (Int(interval) % 3600) / 60
-            if hours > 0 {
-                return "Resets in \(hours)h \(minutes)m"
+        var seenIDs = Set<String>()
+        var windows: [UsageSnapshot.WindowMeters.Window] = []
+        for (index, bucket) in candidates.enumerated() {
+            var id = bucket.bucketId ?? "bucket-\(index)"
+            if !seenIDs.insert(id).inserted {
+                id = "\(id)#\(index)"
+                seenIDs.insert(id)
             }
-            return "Resets in \(minutes)m"
+            var label = baseLabels[index]
+            // Same name reported for several windows (e.g. 5-hour and weekly).
+            if baseLabels.filter({ $0 == label }).count > 1, let window = bucket.window, window != label {
+                label = "\(label) (\(window))"
+            }
+            windows.append(UsageSnapshot.WindowMeters.Window(
+                id: id,
+                label: label,
+                percent: bucket.usedPercent ?? 0,
+                resetText: bucket.resetText
+            ))
         }
-        let out = DateFormatter()
-        out.dateStyle = .short
-        out.timeStyle = .short
-        return "Resets \(out.string(from: date))"
+        let defaultID = displayBucket.flatMap { shown in
+            candidates.firstIndex(of: shown).map { windows[$0].id }
+        }
+        return UsageSnapshot.WindowMeters(windows: windows, defaultID: defaultID)
     }
 
     public var providerUsageItem: ProviderUsageItem {

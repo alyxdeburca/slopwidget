@@ -104,6 +104,68 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         }
     }
 
+    /// A provider's usage windows (percent used, 0...100), retained so the
+    /// widget can cycle through them. Used by providers without a bespoke
+    /// meters type (Codex, Antigravity); keyed by provider ID in
+    /// `UsageSnapshot.windowMeters`.
+    ///
+    /// Cycle order is the order of `windows`, wrapping at the end. Until the
+    /// user first taps, nothing is selected and `defaultID` (or, without one, the
+    /// most constrained window) is shown; after a tap the explicit selection is
+    /// shown, falling back to that default if the selected window disappears.
+    public struct WindowMeters: Codable, Sendable, Equatable {
+        public struct Window: Codable, Sendable, Equatable {
+            /// Stable key, so a selection survives refreshes.
+            public var id: String
+            /// Short text shown next to the percentage, e.g. "5-hour".
+            public var label: String
+            public var percent: Double
+            public var resetText: String?
+
+            public init(id: String, label: String, percent: Double, resetText: String? = nil) {
+                self.id = id
+                self.label = label
+                self.percent = percent
+                self.resetText = resetText
+            }
+        }
+
+        public var windows: [Window]
+        /// The window shown before the first tap.
+        public var defaultID: String?
+
+        public init(windows: [Window] = [], defaultID: String? = nil) {
+            self.windows = windows
+            self.defaultID = defaultID
+        }
+
+        /// The highest-utilization window (ties go to the earliest).
+        public var mostConstrained: Window? {
+            windows.reduce(nil) { best, window in
+                guard let best else { return window }
+                return window.percent > best.percent ? window : best
+            }
+        }
+
+        /// The window to display for a stored selection. nil without any windows.
+        public func displayed(selection: String?) -> Window? {
+            if let selection, let match = windows.first(where: { $0.id == selection }) { return match }
+            if let defaultID, let match = windows.first(where: { $0.id == defaultID }) { return match }
+            return mostConstrained
+        }
+
+        /// The selection to store after a tap: the window after the one
+        /// currently displayed. Stays put with fewer than two windows; nil
+        /// when there are none.
+        public func next(after selection: String?) -> String? {
+            guard let current = displayed(selection: selection) else { return nil }
+            guard windows.count > 1, let index = windows.firstIndex(where: { $0.id == current.id }) else {
+                return current.id
+            }
+            return windows[(index + 1) % windows.count].id
+        }
+    }
+
     public struct Record: Codable, Sendable, Equatable {
         public var id: String
         public var usedPercent: Double
@@ -140,6 +202,12 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
     /// "fiveHour" or "sevenDay". nil until the user first taps, which means
     /// "show the most constrained window".
     public var claudeMeterSelection: String?
+    /// Window lists for providers that cycle through generic windows, keyed by
+    /// provider ID ("codex", "antigravity").
+    public var windowMeters: [String: WindowMeters]?
+    /// Per-provider selected window ID. A provider is missing until its first
+    /// tap, which means "show the default window".
+    public var windowSelections: [String: String]?
     /// Provider IDs in the order the user wants them shown. nil means default.
     public var providerOrder: [String]?
 
@@ -150,6 +218,8 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         openCodeMeterSelection: String? = nil,
         claudeMeters: ClaudeMeters? = nil,
         claudeMeterSelection: String? = nil,
+        windowMeters: [String: WindowMeters]? = nil,
+        windowSelections: [String: String]? = nil,
         providerOrder: [String]? = nil
     ) {
         self.records = records
@@ -158,7 +228,40 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         self.openCodeMeterSelection = openCodeMeterSelection
         self.claudeMeters = claudeMeters
         self.claudeMeterSelection = claudeMeterSelection
+        self.windowMeters = windowMeters
+        self.windowSelections = windowSelections
         self.providerOrder = providerOrder
+    }
+
+    /// Replaces `provider`'s windows (nil or empty removes them). The user's
+    /// selection is kept; only the figures change.
+    public mutating func setWindowMeters(_ meters: WindowMeters?, for provider: String) {
+        var all = windowMeters ?? [:]
+        if let meters, !meters.windows.isEmpty {
+            all[provider] = meters
+        } else {
+            all[provider] = nil
+        }
+        windowMeters = all.isEmpty ? nil : all
+    }
+
+    /// The window currently shown for `provider`, given a selection that may
+    /// come from the widget's own defaults (`stored`) or this snapshot.
+    public func displayedWindow(for provider: String, stored: String? = nil) -> WindowMeters.Window? {
+        windowMeters?[provider]?.displayed(selection: stored ?? windowSelections?[provider])
+    }
+
+    /// Advances `provider` to its next window. Returns the new selection, or
+    /// nil (leaving the snapshot untouched) when the provider has no windows.
+    @discardableResult
+    public mutating func cycleWindow(for provider: String, stored: String? = nil) -> String? {
+        guard let next = windowMeters?[provider]?.next(after: stored ?? windowSelections?[provider]) else {
+            return nil
+        }
+        var selections = windowSelections ?? [:]
+        selections[provider] = next
+        windowSelections = selections
+        return next
     }
 
     /// Stable sort of `items` by their position in `order`. Items missing from
@@ -176,6 +279,32 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
                 return l == r ? lhs.offset < rhs.offset : l < r
             }
             .map(\.element)
+    }
+}
+
+/// Tap-to-cycle plumbing shared by the app and widget intents for providers
+/// that use `UsageSnapshot.WindowMeters`.
+///
+/// The widget process keeps its own copy of the selection in `UserDefaults`
+/// as well as the shared snapshot, so a tap still sticks if the Keychain write
+/// from the extension is refused.
+public enum WindowCycling {
+    public static func defaultsKey(for provider: String) -> String {
+        "windowSelection.\(provider)"
+    }
+
+    /// The selection stored by this process's last tap, if any.
+    public static func storedSelection(for provider: String) -> String? {
+        UserDefaults.standard.string(forKey: defaultsKey(for: provider))
+    }
+
+    /// Advances `provider` to its next window and persists the choice.
+    /// Does nothing when the provider has no windows yet.
+    public static func cycle(provider: String) {
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        guard let next = snapshot.cycleWindow(for: provider, stored: storedSelection(for: provider)) else { return }
+        UserDefaults.standard.set(next, forKey: defaultsKey(for: provider))
+        try? SharedUsageStore.save(snapshot)
     }
 }
 

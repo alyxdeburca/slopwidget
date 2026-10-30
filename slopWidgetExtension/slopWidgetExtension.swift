@@ -31,6 +31,11 @@ struct ProviderUsage: Identifiable {
     var percentageText: String {
         hasUsageData ? "\(percentageInt)%" : "—"
     }
+
+    /// Providers whose usage window the user can cycle by tapping the percentage.
+    static let cyclingIDs: Set<String> = ["opencode-go", "claude", "codex", "antigravity"]
+
+    var cycles: Bool { Self.cyclingIDs.contains(id) }
 }
 
 enum UsageData {
@@ -176,6 +181,25 @@ struct UsageWidgetProvider: TimelineProvider {
                     )
                 }
             }
+            // Codex / Antigravity: nil selection (no tap yet) shows the provider's
+            // default window.
+            if record.hasUsageData ?? true,
+               let window = snapshot.displayedWindow(for: base.id, stored: WindowCycling.storedSelection(for: base.id)) {
+                return ProviderUsage(
+                    id: base.id,
+                    name: base.name,
+                    shortName: base.shortName,
+                    icon: base.icon,
+                    color: base.color,
+                    requestsUsed: min(100, max(0, Int(window.percent.rounded()))),
+                    requestLimit: 100,
+                    tokensUsed: window.label,
+                    status: record.status,
+                    resetText: window.resetText ?? record.resetText,
+                    hasRequestCount: false,
+                    hasUsageData: true
+                )
+            }
             return ProviderUsage(
                 id: base.id,
                 name: base.name,
@@ -200,6 +224,24 @@ struct UsageWidgetProvider: TimelineProvider {
 struct UsageWidgetEntryView: View {
     @Environment(\.widgetFamily) var family
     var entry: UsageWidgetProvider.Entry
+
+    /// Wraps `content` in the provider's tap-to-cycle intent. Providers without
+    /// one get the content unchanged.
+    @ViewBuilder
+    private func cycling<Content: View>(_ provider: ProviderUsage, @ViewBuilder content: () -> Content) -> some View {
+        switch provider.id {
+        case "opencode-go":
+            Button(intent: CycleOpenCodeMeterIntent()) { content() }.buttonStyle(.plain)
+        case "claude":
+            Button(intent: CycleClaudeMeterIntent()) { content() }.buttonStyle(.plain)
+        case "codex":
+            Button(intent: CycleCodexMeterIntent()) { content() }.buttonStyle(.plain)
+        case "antigravity":
+            Button(intent: CycleAntigravityMeterIntent()) { content() }.buttonStyle(.plain)
+        default:
+            content()
+        }
+    }
 
     var body: some View {
         switch family {
@@ -244,37 +286,22 @@ struct UsageWidgetEntryView: View {
                                 .font(.system(size: 10, weight: .semibold))
                                 .lineLimit(1)
                             Spacer()
-                            if provider.id == "opencode-go" {
-                                Button(intent: CycleOpenCodeMeterIntent()) {
-                                    HStack(spacing: 2) {
-                                        Text(provider.percentageText)
+                            cycling(provider) {
+                                HStack(spacing: 2) {
+                                    // Long window names (Antigravity buckets) only fit in the medium widget.
+                                    if provider.cycles, provider.hasUsageData, provider.tokensUsed.count <= 8 {
+                                        Text(provider.tokensUsed)
+                                            .font(.system(size: 8, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text(provider.percentageText)
+                                    if provider.cycles {
                                         Image(systemName: "arrow.triangle.2.circlepath")
                                             .font(.system(size: 7, weight: .bold))
                                     }
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundColor(provider.color)
                                 }
-                                .buttonStyle(.plain)
-                            } else if provider.id == "claude" {
-                                Button(intent: CycleClaudeMeterIntent()) {
-                                    HStack(spacing: 2) {
-                                        if provider.hasUsageData {
-                                            Text(provider.tokensUsed)
-                                                .font(.system(size: 8, weight: .semibold))
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        Text(provider.percentageText)
-                                        Image(systemName: "arrow.triangle.2.circlepath")
-                                            .font(.system(size: 7, weight: .bold))
-                                    }
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundColor(provider.color)
-                                }
-                                .buttonStyle(.plain)
-                            } else {
-                                Text(provider.percentageText)
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundColor(provider.color)
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(provider.color)
                             }
                         }
                         ProgressView(value: provider.percentage)
@@ -319,32 +346,16 @@ struct UsageWidgetEntryView: View {
 
                         Spacer()
 
-                        if provider.id == "opencode-go" {
-                            Button(intent: CycleOpenCodeMeterIntent()) {
-                                HStack(spacing: 3) {
-                                    Text(provider.percentageText)
+                        cycling(provider) {
+                            HStack(spacing: 3) {
+                                Text(provider.percentageText)
+                                if provider.cycles {
                                     Image(systemName: "arrow.triangle.2.circlepath")
                                         .font(.system(size: 9, weight: .bold))
                                 }
-                                .font(.system(size: 20, weight: .heavy, design: .rounded))
-                                .foregroundColor(provider.color)
                             }
-                            .buttonStyle(.plain)
-                        } else if provider.id == "claude" {
-                            Button(intent: CycleClaudeMeterIntent()) {
-                                HStack(spacing: 3) {
-                                    Text(provider.percentageText)
-                                    Image(systemName: "arrow.triangle.2.circlepath")
-                                        .font(.system(size: 9, weight: .bold))
-                                }
-                                .font(.system(size: 20, weight: .heavy, design: .rounded))
-                                .foregroundColor(provider.color)
-                            }
-                            .buttonStyle(.plain)
-                        } else {
-                            Text(provider.percentageText)
-                                .font(.system(size: 20, weight: .heavy, design: .rounded))
-                                .foregroundColor(provider.color)
+                            .font(.system(size: 20, weight: .heavy, design: .rounded))
+                            .foregroundColor(provider.color)
                         }
 
                         ProgressView(value: provider.percentage)
@@ -447,6 +458,38 @@ struct CycleClaudeMeterIntent: AppIntent {
                 try? SharedUsageStore.save(snapshot)
             }
         }
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        return .result()
+    }
+}
+
+/// Tapping the Codex percentage cycles its usage window.
+/// Cycle order: 5-hour -> weekly -> 5-hour (shortest window first);
+/// before the first tap the weekly window is shown.
+struct CycleCodexMeterIntent: AppIntent {
+    static var title: LocalizedStringResource { "Cycle Codex Usage Window" }
+    static var openAppWhenRun: Bool { false }
+
+    func perform() async throws -> some IntentResult {
+        NSLog("CycleCodexMeterIntent fired")
+        WindowCycling.cycle(provider: "codex")
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        return .result()
+    }
+}
+
+/// Tapping the Antigravity percentage cycles its quota buckets in the order
+/// the service reports them; before the first tap the most constrained
+/// bucket is shown.
+struct CycleAntigravityMeterIntent: AppIntent {
+    static var title: LocalizedStringResource { "Cycle Antigravity Usage Window" }
+    static var openAppWhenRun: Bool { false }
+
+    func perform() async throws -> some IntentResult {
+        NSLog("CycleAntigravityMeterIntent fired")
+        WindowCycling.cycle(provider: "antigravity")
         WidgetCenter.shared.reloadAllTimelines()
         WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
         return .result()
