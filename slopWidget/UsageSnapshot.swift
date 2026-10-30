@@ -30,6 +30,68 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         }
     }
 
+    /// The Claude usage windows (percent used, 0...100), retained so the widget
+    /// can cycle them. A nil value means the API reported no figure for it.
+    ///
+    /// Cycle order: "fiveHour" -> "sevenDay" -> "fiveHour". Only windows that
+    /// have data take part. Until the user first taps, nothing is selected and
+    /// the most constrained (highest) window is shown; after a tap the explicit
+    /// selection is shown, falling back to the most constrained window if the
+    /// selected one later loses its data.
+    public struct ClaudeMeters: Codable, Sendable, Equatable {
+        public static let cycleOrder = ["fiveHour", "sevenDay"]
+
+        public var fiveHour: Double?
+        public var sevenDay: Double?
+
+        public init(fiveHour: Double? = nil, sevenDay: Double? = nil) {
+            self.fiveHour = fiveHour
+            self.sevenDay = sevenDay
+        }
+
+        public func percent(for window: String) -> Double? {
+            switch window {
+            case "fiveHour": return fiveHour
+            case "sevenDay": return sevenDay
+            default: return nil
+            }
+        }
+
+        public static func label(for window: String) -> String {
+            window == "sevenDay" ? "Weekly" : "5-hour"
+        }
+
+        /// Windows in cycle order that actually have data.
+        public var availableWindows: [String] {
+            Self.cycleOrder.filter { percent(for: $0) != nil }
+        }
+
+        /// The window with the highest utilization (ties go to the first in cycle order).
+        public var mostConstrainedWindow: String? {
+            availableWindows.reduce(nil) { best, window in
+                guard let best else { return window }
+                return (percent(for: window) ?? 0) > (percent(for: best) ?? 0) ? window : best
+            }
+        }
+
+        /// The window to display for a stored selection: the selection when it
+        /// has data, otherwise the most constrained window. nil without any data.
+        public func displayedWindow(selection: String?) -> String? {
+            if let selection, percent(for: selection) != nil { return selection }
+            return mostConstrainedWindow
+        }
+
+        /// The selection to store after a tap: the next window with data after
+        /// the one currently displayed. Stays put when fewer than two windows
+        /// have data; nil when none do.
+        public func nextWindow(after selection: String?) -> String? {
+            guard let current = displayedWindow(selection: selection) else { return nil }
+            let available = availableWindows
+            guard available.count > 1, let index = available.firstIndex(of: current) else { return current }
+            return available[(index + 1) % available.count]
+        }
+    }
+
     public struct Record: Codable, Sendable, Equatable {
         public var id: String
         public var usedPercent: Double
@@ -58,6 +120,11 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
     public var openCodeMeters: OpenCodeMeters?
     /// "rolling", "weekly", or "monthly".
     public var openCodeMeterSelection: String?
+    /// Both Claude usage windows, retained so the widget can cycle them.
+    public var claudeMeters: ClaudeMeters?
+    /// "fiveHour" or "sevenDay". nil until the user first taps, which means
+    /// "show the most constrained window".
+    public var claudeMeterSelection: String?
     /// Provider IDs in the order the user wants them shown. nil means default.
     public var providerOrder: [String]?
 
@@ -66,12 +133,16 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         updatedAt: Date = Date(),
         openCodeMeters: OpenCodeMeters? = nil,
         openCodeMeterSelection: String? = nil,
+        claudeMeters: ClaudeMeters? = nil,
+        claudeMeterSelection: String? = nil,
         providerOrder: [String]? = nil
     ) {
         self.records = records
         self.updatedAt = updatedAt
         self.openCodeMeters = openCodeMeters
         self.openCodeMeterSelection = openCodeMeterSelection
+        self.claudeMeters = claudeMeters
+        self.claudeMeterSelection = claudeMeterSelection
         self.providerOrder = providerOrder
     }
 

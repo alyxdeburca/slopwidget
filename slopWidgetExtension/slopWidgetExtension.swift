@@ -152,6 +152,27 @@ struct UsageWidgetProvider: TimelineProvider {
                     hasUsageData: true
                 )
             }
+            if base.id == "claude", record.hasUsageData ?? true, let meters = snapshot.claudeMeters {
+                // nil selection (no tap yet) shows the most constrained window.
+                let stored = UserDefaults.standard.string(forKey: "claudeMeterSelection")
+                    ?? snapshot.claudeMeterSelection
+                if let window = meters.displayedWindow(selection: stored),
+                   let percent = meters.percent(for: window) {
+                    return ProviderUsage(
+                        id: base.id,
+                        name: base.name,
+                        shortName: base.shortName,
+                        icon: base.icon,
+                        color: base.color,
+                        requestsUsed: min(100, max(0, Int(percent.rounded()))),
+                        requestLimit: 100,
+                        tokensUsed: UsageSnapshot.ClaudeMeters.label(for: window),
+                        status: record.status,
+                        hasRequestCount: false,
+                        hasUsageData: true
+                    )
+                }
+            }
             return ProviderUsage(
                 id: base.id,
                 name: base.name,
@@ -230,6 +251,22 @@ struct UsageWidgetEntryView: View {
                                     .foregroundColor(provider.color)
                                 }
                                 .buttonStyle(.plain)
+                            } else if provider.id == "claude" {
+                                Button(intent: CycleClaudeMeterIntent()) {
+                                    HStack(spacing: 2) {
+                                        if provider.hasUsageData {
+                                            Text(provider.tokensUsed)
+                                                .font(.system(size: 8, weight: .semibold))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(provider.percentageText)
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                            .font(.system(size: 7, weight: .bold))
+                                    }
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(provider.color)
+                                }
+                                .buttonStyle(.plain)
                             } else {
                                 Text(provider.percentageText)
                                     .font(.system(size: 10, weight: .bold))
@@ -280,6 +317,17 @@ struct UsageWidgetEntryView: View {
 
                         if provider.id == "opencode-go" {
                             Button(intent: CycleOpenCodeMeterIntent()) {
+                                HStack(spacing: 3) {
+                                    Text(provider.percentageText)
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 9, weight: .bold))
+                                }
+                                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                                .foregroundColor(provider.color)
+                            }
+                            .buttonStyle(.plain)
+                        } else if provider.id == "claude" {
+                            Button(intent: CycleClaudeMeterIntent()) {
                                 HStack(spacing: 3) {
                                     Text(provider.percentageText)
                                     Image(systemName: "arrow.triangle.2.circlepath")
@@ -364,6 +412,31 @@ struct CycleOpenCodeMeterIntent: AppIntent {
         snapshot.openCodeMeterSelection = next
         UserDefaults.standard.set(next, forKey: "opencodeMeterSelection")
         try? SharedUsageStore.save(snapshot)
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
+        return .result()
+    }
+}
+
+/// Tapping the Claude percentage cycles its usage window.
+/// Cycle order: 5-hour -> weekly -> 5-hour, skipping windows without data;
+/// before the first tap the most constrained window is shown.
+struct CycleClaudeMeterIntent: AppIntent {
+    static var title: LocalizedStringResource { "Cycle Claude Usage Window" }
+    static var openAppWhenRun: Bool { false }
+
+    func perform() async throws -> some IntentResult {
+        NSLog("CycleClaudeMeterIntent fired")
+        var snapshot = SharedUsageStore.load() ?? UsageSnapshot()
+        if let meters = snapshot.claudeMeters {
+            let current = UserDefaults.standard.string(forKey: "claudeMeterSelection")
+                ?? snapshot.claudeMeterSelection
+            if let next = meters.nextWindow(after: current) {
+                snapshot.claudeMeterSelection = next
+                UserDefaults.standard.set(next, forKey: "claudeMeterSelection")
+                try? SharedUsageStore.save(snapshot)
+            }
+        }
         WidgetCenter.shared.reloadAllTimelines()
         WidgetCenter.shared.reloadTimelines(ofKind: "slopWidget")
         return .result()
