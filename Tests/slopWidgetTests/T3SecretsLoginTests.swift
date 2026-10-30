@@ -131,15 +131,16 @@ final class T3SecretsLoginTests: XCTestCase {
     }
 
     @MainActor
-    func testAllThreeServicesConnectedConcurrently() {
+    func testAllServicesConnectedConcurrently() {
         let auth = AuthManager()
         let secrets = discoverT3Secrets()
 
         XCTAssertTrue(auth.login(type: .antigravity, apiKey: secrets.antigravityKey, identifier: secrets.antigravityId))
         XCTAssertTrue(auth.login(type: .codex, apiKey: secrets.codexKey, identifier: secrets.codexId))
         XCTAssertTrue(auth.login(type: .opencodeGo, apiKey: secrets.opencodeKey, identifier: secrets.opencodeId))
+        XCTAssertTrue(auth.login(type: .claude, apiKey: "sk-ant-oat01-test", identifier: "claude-test"))
 
-        // Verify all 3 are simultaneously active
+        // Verify every provider is simultaneously active
         for svc in ServiceProviderType.allCases {
             let creds = auth.credentials(for: svc)
             XCTAssertTrue(creds.isLoggedIn, "\(svc.displayName) should be logged in")

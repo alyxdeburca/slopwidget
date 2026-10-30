@@ -26,6 +26,9 @@ import Network
 actor LoopbackHTTPServer {
     private let ports: [UInt16]
     private let callbackPath: String
+    /// Host advertised in the redirect URI. The socket always binds 127.0.0.1;
+    /// Claude's client is registered as `http://localhost:<port>/callback`.
+    private let redirectHost: String
     private var listener: NWListener?
     private var baseURL: URL?
     private var waiter: CheckedContinuation<URL, Error>?
@@ -36,10 +39,12 @@ actor LoopbackHTTPServer {
     init(
         ports: [UInt16] = [1455, 1457],
         callbackPath: String = "/auth/callback",
+        redirectHost: String = "127.0.0.1",
         loggerCategory: String = "ChatGPTAuth"
     ) {
         self.ports = ports
         self.callbackPath = callbackPath
+        self.redirectHost = redirectHost
         self.logger = Logger(subsystem: "com.example.slopWidget", category: loggerCategory)
     }
 
@@ -50,7 +55,7 @@ actor LoopbackHTTPServer {
             do {
                 let boundPort = try await bind(port: port)
                 logger.info("Loopback listener bound on 127.0.0.1:\(boundPort)")
-                let baseURL = URL(string: "http://127.0.0.1:\(boundPort)")!
+                let baseURL = URL(string: "http://\(redirectHost):\(boundPort)")!
                 self.baseURL = baseURL
                 return URL(string: callbackPath, relativeTo: baseURL)!.absoluteURL
             } catch {
