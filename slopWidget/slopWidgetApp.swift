@@ -15,13 +15,23 @@ struct slopWidgetApp: App {
         CycleAntigravityMeterIntent.self,
     ]
 
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
         precondition(!Self.widgetIntents.isEmpty)
+        // iOS requires background tasks to be registered before launch finishes.
+        BackgroundRefresh.register()
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Queue the next background refresh each time the app is left.
+            if phase == .background {
+                BackgroundRefresh.schedule(after: TimeInterval(AuthManager.shared.refreshMinutes * 60))
+            }
         }
     }
 }

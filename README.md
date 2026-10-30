@@ -46,7 +46,12 @@ Built with SwiftUI + WidgetKit, cross-compiled on Linux with
   1x3 and medium widgets the first three.
 - **Shared app/widget state** via a Keychain access group (free provisioning
   has no App Groups), so the widget reflects the latest fetch.
-- **Manual refresh** button and 15-minute timeline reloads.
+- **Configurable refresh** (5 min, 15 min, 30 min, or 1 hour; default 15 min):
+  how often usage refreshes while the app is open, how often the widget
+  reloads, and how soon the app asks iOS for a background refresh. iOS decides
+  when background refreshes and widget reloads actually run, so with the app
+  closed the numbers can lag behind the interval. A **Manual refresh** button
+  fetches immediately.
 
 ### Dashboard
 

@@ -128,7 +128,10 @@ struct UsageWidgetProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageWidgetEntry>) -> Void) {
         let currentDate = Date()
         let entry = UsageWidgetEntry(date: currentDate, providers: currentProviders())
-        completion(Timeline(entries: [entry], policy: .after(currentDate.addingTimeInterval(15 * 60))))
+        // The interval the user picked in the app (default 15 minutes).
+        let interval = SharedUsageStore.load()?.refreshInterval
+            ?? TimeInterval(RefreshInterval.defaultMinutes * 60)
+        completion(Timeline(entries: [entry], policy: .after(currentDate.addingTimeInterval(interval))))
     }
 
     /// Read the snapshot the app writes to the shared keychain. Fall back to

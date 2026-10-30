@@ -210,6 +210,9 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
     public var windowSelections: [String: String]?
     /// Provider IDs in the order the user wants them shown. nil means default.
     public var providerOrder: [String]?
+    /// How often, in minutes, the app refreshes usage and the widget reloads.
+    /// nil means the default. Read through `refreshInterval`, which normalizes it.
+    public var refreshMinutes: Int?
 
     public init(
         records: [String: Record] = [:],
@@ -220,7 +223,8 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         claudeMeterSelection: String? = nil,
         windowMeters: [String: WindowMeters]? = nil,
         windowSelections: [String: String]? = nil,
-        providerOrder: [String]? = nil
+        providerOrder: [String]? = nil,
+        refreshMinutes: Int? = nil
     ) {
         self.records = records
         self.updatedAt = updatedAt
@@ -231,6 +235,12 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         self.windowMeters = windowMeters
         self.windowSelections = windowSelections
         self.providerOrder = providerOrder
+        self.refreshMinutes = refreshMinutes
+    }
+
+    /// The refresh interval in seconds, always one of `RefreshInterval.allowedMinutes`.
+    public var refreshInterval: TimeInterval {
+        TimeInterval(RefreshInterval.normalized(refreshMinutes) * 60)
     }
 
     /// Replaces `provider`'s windows (nil or empty removes them). The user's
@@ -279,6 +289,28 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
                 return l == r ? lhs.offset < rhs.offset : l < r
             }
             .map(\.element)
+    }
+}
+
+/// The refresh intervals the user can choose between. The app refreshes usage
+/// on this schedule while it is open and asks iOS for background refreshes on
+/// it; the widget reloads its timeline on it. iOS decides when background
+/// refreshes and widget reloads actually run, so these are requests.
+public enum RefreshInterval {
+    public static let allowedMinutes = [5, 15, 30, 60]
+    public static let defaultMinutes = 15
+
+    /// `minutes` if it is an allowed value, the nearest allowed value (the
+    /// shorter one on a tie) if not, and the default when nil.
+    public static func normalized(_ minutes: Int?) -> Int {
+        guard let minutes else { return defaultMinutes }
+        if allowedMinutes.contains(minutes) { return minutes }
+        return allowedMinutes.min { abs($0 - minutes) < abs($1 - minutes) } ?? defaultMinutes
+    }
+
+    /// Short label for a picker, e.g. "5 min", "1 hour".
+    public static func label(forMinutes minutes: Int) -> String {
+        minutes % 60 == 0 ? "\(minutes / 60) hour" : "\(minutes) min"
     }
 }
 
