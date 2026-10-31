@@ -345,13 +345,64 @@ public enum SharedUsageStore {
     private static let service = "com.example.slopWidget.usage"
     private static let account = "latest"
 
-    /// The free provisioning profile grants keychain access group `<TEAM>.*`.
-    /// The app bundle ID is `XTL-<TEAM>.<bundle>` in xtool-signed builds.
-    public static var accessGroup: String? {
-        // Use the app's own keychain access group. The extension profile grants
-        // the team wildcard, so the widget can read the app's item.
-        "L25T52S232.XTL-L25T52S232.com.example.slopWidget"
+    /// Keychain access group used by the author's xtool-signed builds. Only a
+    /// fallback: re-signed builds (AltStore/SideStore OTA installs) run under a
+    /// different team ID and bundle ID.
+    static let fallbackAccessGroup = "L25T52S232.XTL-L25T52S232.com.example.slopWidget"
+
+    /// Bundle ID suffix of the widget extension relative to the app.
+    private static let extensionSuffix = ".slopWidgetExtension"
+
+    /// The app's own keychain access group, which the widget extension also
+    /// reads (the free provisioning profile grants the team wildcard). Resolved
+    /// at runtime so the signing team and bundle ID can change on re-signing.
+    public static let accessGroup: String? = {
+        #if canImport(Security)
+        guard let resolved = appAccessGroup(fromDefault: defaultAccessGroup()),
+              !resolved.hasPrefix(fallbackAccessGroup.prefix { $0 != "." } + ".") else {
+            // Probe failed, or this is the author's own team: keep the known value.
+            return fallbackAccessGroup
+        }
+        return resolved
+        #else
+        return nil
+        #endif
+    }()
+
+    /// Maps a process's default keychain group (`<TEAM>.<its bundle ID>`) to
+    /// the app's group: the extension's default group is the app's plus
+    /// `extensionSuffix`; the app's is already the right one.
+    static func appAccessGroup(fromDefault group: String?) -> String? {
+        guard let group, !group.isEmpty else { return nil }
+        return group.hasSuffix(extensionSuffix) ? String(group.dropLast(extensionSuffix.count)) : group
     }
+
+    #if canImport(Security)
+    /// Adds a throwaway item without an explicit group and reads back which
+    /// group the system put it in (the process's default group).
+    private static func defaultAccessGroup() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "access-group-probe",
+        ]
+        var add = query
+        add[kSecValueData as String] = Data([0])
+        add[kSecReturnAttributes as String] = true
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+
+        var result: CFTypeRef?
+        var status = SecItemAdd(add as CFDictionary, &result)
+        if status == errSecDuplicateItem {
+            var lookup = query
+            lookup[kSecReturnAttributes as String] = true
+            status = SecItemCopyMatching(lookup as CFDictionary, &result)
+        }
+        guard status == errSecSuccess,
+              let attributes = result as? [String: Any] else { return nil }
+        return attributes[kSecAttrAccessGroup as String] as? String
+    }
+    #endif
 
     public static func save(_ snapshot: UsageSnapshot) throws {
         let data = try JSONEncoder().encode(snapshot)
