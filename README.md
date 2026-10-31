@@ -93,7 +93,7 @@ usage window in place (see "Tap-to-cycle for every provider" above).
   URL scheme (deep-link fallback).
 - **[slopWidget/](slopWidget/)**: Application source code.
   - `slopWidgetApp.swift`: App scene lifecycle.
-  - `ContentView.swift`: Dashboard and live widget previews.
+  - `ContentView.swift`: Dashboard (connections, refresh, widget order) and the widget views used for previews/screenshots.
   - `AuthManager.swift`: Centralized `@MainActor` credential storage and state
     for all three providers.
   - `LoginSheetView.swift`: Account management sheet.
